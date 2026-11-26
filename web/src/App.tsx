@@ -11,6 +11,7 @@ import { MLPage } from "./MLPage";
 import { BookPage } from "./BookPage";
 import { HelpPage } from "./HelpPage";
 import { EventsPage } from "./EventsPage";
+import { AccountPage } from "./AccountPage";
 import { EventsNote } from "./eventsUi";
 import { Guide } from "./help";
 import { DEFAULT_SETTINGS, fromPreset, loadSaved, presetByKey, request, save, type Settings, type UIAsset } from "./state";
@@ -24,11 +25,12 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
-function route(): { page: "explore" | "factors" | "ml" | "book" | "events" | "theory" | "about" | "help"; tab: Tab } {
+function route(): { page: "explore" | "factors" | "ml" | "book" | "account" | "events" | "theory" | "about" | "help"; tab: Tab } {
   const parts = window.location.hash.replace(/^#\/?/, "").split("?")[0].split("/");
   if (parts[0] === "factors") return { page: "factors", tab: "overview" };
   if (parts[0] === "ml") return { page: "ml", tab: "overview" };
   if (parts[0] === "book") return { page: "book", tab: "overview" };
+  if (parts[0] === "account") return { page: "account", tab: "overview" };
   if (parts[0] === "help") return { page: "help", tab: "overview" };
   if (parts[0] === "events") return { page: "events", tab: "overview" };
   if (parts[0] === "theory") return { page: "theory", tab: "overview" };
@@ -121,6 +123,7 @@ export default function App() {
           <a href="#/factors" aria-current={nav.page === "factors" ? "page" : undefined}>Факторы акций</a>
           <a href="#/ml" aria-current={nav.page === "ml" ? "page" : undefined}>ML-прогноз</a>
           <a href="#/book" aria-current={nav.page === "book" ? "page" : undefined}>Портфель из блоков</a>
+          <a href="#/account" aria-current={nav.page === "account" ? "page" : undefined}>Мой счёт</a>
           <a href="#/events" aria-current={nav.page === "events" ? "page" : undefined}>События</a>
           <a href="#/theory" aria-current={nav.page === "theory" ? "page" : undefined}>Теория</a>
           <a href="#/about" aria-current={nav.page === "about" ? "page" : undefined}>Исследование бота</a>
@@ -139,6 +142,7 @@ export default function App() {
       {nav.page === "factors" && <Factors />}
       {nav.page === "ml" && <MLPage />}
       {nav.page === "book" && <BookPage />}
+      {nav.page === "account" && <AccountPage />}
       {nav.page === "help" && <HelpPage />}
       {nav.page === "events" && <EventsPage />}
       {nav.page === "theory" && <Theory />}

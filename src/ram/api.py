@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, book, events, factors, ml, sas, sources, watch
+from . import __version__, account, book, events, factors, ml, sas, sources, watch
 from .net import NotFound
 from .presets import PRESETS
 from .rule import CONTROLS, Params
@@ -139,6 +139,39 @@ def book_report(req: dict) -> dict:
     with _factor_lock:
         try:
             res = clean(book.report(req))
+        except NotFound as e:
+            raise HTTPException(404, str(e)) from e
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(400, str(e)) from e
+    return _remember(key, res)
+
+
+@app.get("/api/account/settings")
+def account_settings_get() -> dict:
+    """The account's settings and the wealth outside it (data/user/account.json, outside git)."""
+    return account.load_settings().as_dict()
+
+
+@app.put("/api/account/settings")
+def account_settings_put(req: dict) -> dict:
+    try:
+        return account.save_settings(req).as_dict()
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.post("/api/account")
+def account_report(req: dict) -> dict:
+    """The book on a real account (account.py): whole lots and contracts, fees, the tax, the plan, the wealth around it."""
+    s = account.load_settings()
+    key = "account:" + json.dumps({"req": req, "s": s.as_dict()}, sort_keys=True, ensure_ascii=False)
+    with _lock:
+        if key in _results:
+            _results.move_to_end(key)
+            return _results[key]
+    with _factor_lock:
+        try:
+            res = clean(account.report(req))
         except NotFound as e:
             raise HTTPException(404, str(e)) from e
         except (ValueError, KeyError, TypeError) as e:

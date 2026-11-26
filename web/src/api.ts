@@ -184,6 +184,52 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+// ---------------------------------------------------------------------------- the account (account.py)
+export interface AccountFund { secid: string; units: number; payout: number }
+export interface AccountSettings {
+  money: number; futures_money: number; fee: number; fee_fut: number; fee_month: number; tax: number;
+  slip_stock: number; slip_fut: number; slip_fund: number; mmf: string; bond_fund: string; index_fund: string;
+  bonds: "fund" | "futures"; trend_exec: "daily" | "weekly"; gold_grams: number; gold_haircut: number;
+  fx: Record<string, number>; fx_haircut: number; funds: AccountFund[]; capital?: number;
+}
+export interface AccountCosts { stocks: number; funds: number; futures: number; fixed: number; drag: number; div_tax: number; income_tax: number }
+export interface AccountRow {
+  key: string; title: string; kind: "ideal" | "live" | "alt" | "money"; capital: number; cagr: number; vol: number; dd: number;
+  paid_tax_cagr?: N; after_tax_cagr?: N; ldv_cagr?: N; ideal_cagr?: N; tracking?: number; costs?: AccountCosts; rounding?: number;
+  margin_mean?: number; margin_max?: number; trades_year?: number; final_tax?: number; end?: number; end_after_tax?: number;
+}
+export interface PlanRow {
+  kind: "share" | "bond" | "mmf" | "index"; code: string; name: string; lot: number; price: number; lots: number; units: number;
+  value: number; target: number; spread: N; status?: "exclude" | "warn" | "ok"; events?: ExchangeEvent[];
+}
+export interface PlanFuture {
+  kind: "future"; code: string; market: string; contracts: number; notional: number; target: number; trend: number; value: number;
+  margin: number; margin_one: number;
+}
+export interface AccountPlan {
+  date: string; weights: number[]; capital: number; rows: PlanRow[]; futures: PlanFuture[]; margin: number; futures_money: number;
+  margin_share: number; entry_cost: number; rounding: number; off: number;
+}
+export interface WealthItem { kind: "account" | "gold" | "fx" | "fund"; label: string; value: number; sale: number; share: number; detail?: string; code?: string }
+export interface WealthScenario {
+  label: string; kind: "hyp" | "hist"; to?: string; account: number; gold: number; fx: number; funds: number; total: number; share: number;
+  account_share: number; moves: number[];
+}
+export interface FundStat {
+  secid: string; name: string; price: number; last: string; first: string; weeks: number; price_cagr?: number; vol?: number; dd?: number;
+  beta_eq: number; beta_bd: number; assumed: boolean; units: number; payout: number; value: number; total: N;
+}
+export interface FundDrag { secid: string; index: string; drag: number; years: number; from: string | null; measured: boolean }
+export interface AccountResult {
+  meta: { opts: BookRequest; from: string; to: string; years: number; drags: Record<"mmf" | "bond" | "index", FundDrag>;
+    specs_date: string; unknown_lots: number; notes: string[] };
+  settings: AccountSettings; rows: AccountRow[]; live: AccountRow & { mmf_min: number };
+  series: { dates: string[]; ideal: number[]; live: number[]; money: number[] };
+  plan: AccountPlan;
+  wealth: { items: WealthItem[]; total: number; scenarios: WealthScenario[]; funds: FundStat[]; notes: string[]; cushion: number; cushion_share: number };
+  elapsed: number;
+}
+
 export const api = {
   meta: () => call<Meta>("/api/meta"),
   search: (q: string, signal?: AbortSignal) => call<SearchHit[]>(`/api/search?q=${encodeURIComponent(q)}`, { signal }),
@@ -205,4 +251,9 @@ export const api = {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) }),
   book: (req: BookRequest) => call<BookResult>("/api/book", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
+  account: (opts: Partial<BookRequest>) => call<AccountResult>("/api/account", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ opts }) }),
+  accountSettings: () => call<AccountSettings>("/api/account/settings"),
+  saveAccountSettings: (s: AccountSettings) => call<AccountSettings>("/api/account/settings", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(s) }),
 };

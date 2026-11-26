@@ -72,7 +72,7 @@ code { font-family: var(--font-mono); font-size: 0.86em; }
 .brand { display: flex; align-items: center; gap: 0.55rem; font-weight: 700; font-size: 1.02rem; color: var(--ink); text-decoration: none; white-space: nowrap; }
 .logo { width: 22px; height: 22px; display: block; }
 .pages { display: flex; gap: 0.1rem; flex-wrap: wrap; }
-.pages a { padding: 0.35rem 0.55rem; border-radius: 6px; color: var(--ink-2); text-decoration: none; font-weight: 500; font-size: 0.93rem; }
+.pages a { padding: 0.35rem 0.45rem; border-radius: 6px; color: var(--ink-2); text-decoration: none; font-weight: 500; font-size: 0.9rem; white-space: nowrap; }
 .pages a:hover { background: var(--sheet); color: var(--ink); }
 .pages a[aria-current="page"] { background: var(--sheet); color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
 .theme { margin-left: auto; }
@@ -370,3 +370,16 @@ td.book-scen { min-width: 15rem; }
 .chip.ev-exclude { border-color: color-mix(in srgb, var(--neg) 55%, transparent); color: var(--neg); }
 .chip.ev-warn { border-color: color-mix(in srgb, var(--warn) 80%, transparent); }
 button.link { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; }
+
+/* ---------------------------------------------------------------- the account */
+.num-in { display: flex; align-items: center; gap: 0.35rem; }
+.num-in small { color: var(--ink-3); white-space: nowrap; }
+.lab-controls .num-field .num-in input { width: 7.5rem; }
+.sub-head { margin: 1.1rem 0 0.5rem; font-size: 0.9rem; font-weight: 600; color: var(--ink); }
+.acc-funds { margin-top: 0.8rem; display: grid; gap: 0.5rem; justify-items: start; }
+.acc-funds .hint { margin: 0; }
+.acc-fund input:not([type="number"]) { width: 11rem; font-variant-numeric: tabular-nums; }
+.acc-apply { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1rem; margin-top: 1rem; }
+.acc-apply .hint { margin: 0; }
+table tr.me td { font-weight: 600; }
+.dev-off { font-weight: 700; }

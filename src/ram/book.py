@@ -142,6 +142,8 @@ class Data:
     sales: dict[str, list[dict]] = None  # equity sleeve -> shares sold on exchange events
     exits: dict = None  # ticker -> event spans (events.exits)
     events_from: str | None = None  # the news the filter has seen start here
+    fut_xr: np.ndarray = None  # W x 4 weekly excess returns of the trend book's markets (a futures contract's return)
+    fut_px: np.ndarray = None  # W x 4 their price levels (to scale today's contract value back in time)
 
 
 _cache: dict[tuple, Data] = {}
@@ -186,16 +188,27 @@ def _build(p: universe.Panel, cost: float) -> Data:
     returns["cash"] = np.r_[np.nan, rate[:-1] * np.diff(ords) / 365]
     pos: dict[str, np.ndarray] = {}
     scen: list[dict] = []
+    fut_xr = fut_px = None
     for key, _ in TRENDS:
         r, ps, b = trend_sleeve(key, p.dates, notes)
         returns[f"trend:{key}"], pos[key] = r, ps
         if not scen:
             scen = scenario_set(b)
+            fut_xr, fut_px = market_weekly(b, p.dates)
     mkt = np.column_stack([returns["equity:mcftr"], returns["bonds:ofz"]])
     ends = [t for t in factors.month_ends(p.dates) if t < W - 1]  # the panel's last week is a month-end only by chance
     return Data(dates=p.dates, ends=ends, returns=returns, picks=picks, pos=pos, mkt=mkt,
                 scenarios=scen, names=dict(p.names), notes=notes, panel_to=p.dates[-1],
-                sales=sales, exits=exits, events_from=cov.get("from"))
+                sales=sales, exits=exits, events_from=cov.get("from"), fut_xr=fut_xr, fut_px=fut_px)
+
+
+def market_weekly(b, dates: list[str]) -> tuple[np.ndarray, np.ndarray]:
+    """(W x 4 weekly excess returns, W x 4 price levels) of the trend book's markets on the panel's weeks."""
+    idx = np.searchsorted(np.array(b.dates), np.array(dates), side="right") - 1
+    E = np.where((idx >= 0)[:, None], b.E[np.clip(idx, 0, None)], np.nan)
+    P = np.where((idx >= 0)[:, None], b.P[np.clip(idx, 0, None)], np.nan)
+    xr = np.vstack([np.full(b.n, np.nan), E[1:] / E[:-1] - 1])
+    return xr, P
 
 
 def composite(m: factors.Month) -> np.ndarray | None:

@@ -38,6 +38,13 @@ def main(argv: list[str] | None = None) -> int:
     bk.add_argument("--limit", type=float, default=0.25, help="предел потерь в любом сценарии (0 — без предела)")
     bk.add_argument("--control", type=int, default=0, help="контроль просадки: номер из списка правила")
     bk.add_argument("--start", default="2016-01-01")
+    ac = sub.add_parser("account", help="портфель из блоков на счёте Т-Банка: лоты, контракты, комиссии, налог, подушка")
+    ac.add_argument("--limit", type=float, default=0.25, help="предел потерь в любом сценарии (0 — без предела)")
+    ac.add_argument("--trend", default="main", help="main | main_guard")
+    ac.add_argument("--equity", default="composite", help="composite | gbm | ew | mcftr")
+    ac.add_argument("--set", nargs="*", default=[], metavar="КЛЮЧ=ЗНАЧЕНИЕ",
+                    help="настройки счёта на этот расчёт (money=200000 bonds=futures trend_exec=weekly ...)")
+    ac.add_argument("--save", action="store_true", help="сохранить --set в data/user/account.json")
     ev = sub.add_parser("events", help="события Мосбиржи: дефолты, банкротства, делистинг, сектор повышенного риска")
     ev.add_argument("--update", action="store_true", help="перечитать ленту новостей биржи сейчас")
     ev.add_argument("--since", help="дочитать ленту вглубь до даты (по умолчанию — два года)")
@@ -123,6 +130,44 @@ def main(argv: list[str] | None = None) -> int:
             what = {"rebalance": "ребалансировка", "cut": "срез", "adjust": "к цели"}[r["kind"]]
             print(f"  {r['date']} {what}: " + ", ".join(f"{n} {w:.0%}" for n, w in zip(m["sleeves"], r["w"]))
                   + f" · {r['scenario']} {-r['loss_before']:+.0%} → {-r['loss_after']:+.0%}")
+        return 0
+    if a.cmd == "account":
+        from . import account
+
+        def rub(x: float, sign: bool = False) -> str:
+            return (f"{x:+,.0f}" if sign else f"{x:,.0f}").replace(",", "\u202f")
+        over = {}
+        for kv in a.set:
+            k, _, v = kv.partition("=")
+            over[k] = v if k in ("mmf", "bond_fund", "index_fund", "bonds", "trend_exec") else float(v)
+        if a.save:
+            account.save_settings({**account.load_settings().as_dict(), **over})
+        res = account.report({"opts": {"limit": a.limit, "trend": a.trend, "equity": a.equity}, "settings": over})
+        m, st, pl = res["meta"], res["settings"], res["plan"]
+        print(f"Счёт {rub(st['capital'])} ₽ ({rub(st['money'])} на бумаги, {rub(st['futures_money'])} под фьючерсы), "
+              f"{m['from']}..{m['to']}; комиссии {st['fee']:.3%} / фьючерсы {st['fee_fut']:.3%}, тариф "
+              f"{st['fee_month']:.0f} ₽/мес, налог {st['tax']:.0%}")
+        print(f"  {'':58}{'до налога':>10}{'после':>8}{'вол.':>7}{'просадка':>10}{'лоты':>6}")
+        for r in res["rows"]:
+            after = r.get("after_tax_cagr")
+            print(f"  {r['title'][:58]:58}{r['cagr']:+10.1%}" + (f"{after:+8.1%}" if after is not None else " " * 8)
+                  + f"{r['vol']:7.1%}{r['dd']:10.1%}" + (f"{r['rounding']:6.0%}" if r.get("rounding") else ""))
+        c = res["live"]["costs"]
+        print("  издержки счёта в год: " + ", ".join(f"{k} {v:.2%}" for k, v in c.items()))
+        print(f"  план на {pl['date']}: доли " + ", ".join(f"{w:.0%}" for w in pl["weights"])
+              + f"; ГО {rub(pl['margin'])} ₽ из {rub(pl['futures_money'])}; вход {rub(pl['entry_cost'])} ₽")
+        for r in pl["rows"]:
+            print(f"    {r['code']:13}{r['name'][:26]:26}{r['lots']:>8} лот. по {r['lot']:<6}{rub(r['value']):>12} ₽"
+                  f"  (цель {rub(r['target'])})" + (f" {r['status']}" if r.get("status", "ok") != "ok" else ""))
+        for f in pl["futures"]:
+            print(f"    {f['code']:13}{f['market'][:26]:26}{f['contracts']:>+8d} конт.{rub(f['notional']):>12} ₽"
+                  f"  ГО {rub(f['margin'])}")
+        w = res["wealth"]
+        if len(w["items"]) > 1:
+            print(f"  капитал вместе с подушкой: {rub(w['total'])} ₽")
+            for s_ in w["scenarios"][:5]:
+                print(f"    {s_['label'][:46]:46} счёт {rub(s_['account'], True):>12}  вне счёта {rub(s_['total'] - s_['account'], True):>12}"
+                      f"  всего {s_['share']:+.1%}")
         return 0
     if a.cmd == "events":
         from . import events
