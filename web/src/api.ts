@@ -109,6 +109,43 @@ export interface MLLab {
 }
 export interface FactorRequest { start: string; top: number; cost: number }
 
+export type Choice = [string, string];
+export interface BookRequest {
+  equity: string; bonds: string; trend: string; method: "risk" | "weights"; budget: [number, number, number];
+  target_vol: number; limit: number; control: number; cost: number; start: string;
+}
+export interface BookRow {
+  key: string; title: string; kind: "book" | "sleeve"; cagr: N; vol: N; sharpe: N; dd: N; dd_from: string; dd_to: string;
+  worst_week: N; worst_4w: N; years: N; cut_weeks?: N; adjust_weeks?: N; binding?: N; worst_scenario?: N; cash_share?: N; turnover?: N;
+}
+export interface BookDecision {
+  date: string; kind: "rebalance" | "cut" | "adjust"; w: number[]; budget_w?: number[]; vol?: N; rc?: number[]; scenario: string;
+  loss_before: number; loss_after: number; cut: number[]; m: number; pos: number[]; betas?: number[]; picks?: string[]; added?: string[];
+  removed?: string[]; next: N; until: string;
+}
+export interface BookScenario { label: string; kind: "hyp" | "hist"; to: string; loss: number; sleeves: number[]; moves: number[] }
+export interface SharpeDiff { rho: number; sr_a: number; sr_b: number; diff: number; se: number; t: number; years_needed: N }
+export interface BookResult {
+  meta: {
+    opts: Omit<BookRequest, "budget"> & { budget: Record<string, number> }; from: string; to: string; weeks: number;
+    panel_to: string; window: number; min_weeks: number; rebalance_cost: number; notes: string[]; control: string;
+    choices: { equity: Choice[]; bonds: Choice[]; trend: Choice[]; controls: string[] }; sleeves: string[]; markets: string[];
+  };
+  rows: BookRow[];
+  series: { dates: string[]; equity: Record<string, number[]>; drawdown: Record<string, number[]>; weights: number[][];
+    worst: number[]; worst_no_cap: number[] | null };
+  years: { year: string; book: N; "6040": N; mcftr: N; cash: N }[];
+  tests: { book: { sharpe: number; years: number; se: number; low: number; high: number; t: number } } &
+    Record<string, SharpeDiff | Record<string, never>>;
+  limits: (BookRow & { limit: number })[];
+  corr: { labels: string[]; values: number[][] };
+  log: BookDecision[];
+  today: { date: string; w: number[]; budget: number[]; decided: string; latest: string; latest_kind: BookDecision["kind"];
+    pos: number[]; scenarios: BookScenario[];
+    limit: number; picks: { ticker: string; name: string }[]; picked: string | null; betas: number[] };
+  elapsed: number;
+}
+
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
   if (!r.ok) {
@@ -131,5 +168,7 @@ export const api = {
   factors: (req: FactorRequest) => call<FactorLab>("/api/factors", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
   ml: (req: FactorRequest) => call<MLLab>("/api/ml", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
+  book: (req: BookRequest) => call<BookResult>("/api/book", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
 };

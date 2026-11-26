@@ -1,4 +1,4 @@
-"""ram serve | study | fetch | search."""
+"""ram serve | study | fetch | search | factors | ml | book | valuation."""
 from __future__ import annotations
 
 import argparse
@@ -28,6 +28,16 @@ def main(argv: list[str] | None = None) -> int:
     mll.add_argument("--start", default="2015-01-01")
     mll.add_argument("--top", type=int, default=100)
     mll.add_argument("--cost", type=float, default=0.002)
+    bk = sub.add_parser("book", help="портфель из блоков: отбор акций, облигации, тренд бота, деньги")
+    bk.add_argument("--equity", default="composite", help="composite | gbm | ew | mcftr")
+    bk.add_argument("--bonds", default="ofz", help="ofz | corp")
+    bk.add_argument("--trend", default="main", help="main | main_guard")
+    bk.add_argument("--budget", default="1,1,1", help="бюджет риска (или доли капитала с --weights): акции,облигации,тренд")
+    bk.add_argument("--weights", action="store_true", help="бюджет — доли капитала, а не риска")
+    bk.add_argument("--vol", type=float, default=0.10, help="целевая волатильность в год")
+    bk.add_argument("--limit", type=float, default=0.25, help="предел потерь в любом сценарии (0 — без предела)")
+    bk.add_argument("--control", type=int, default=0, help="контроль просадки: номер из списка правила")
+    bk.add_argument("--start", default="2016-01-01")
     va = sub.add_parser("valuation", help="оценка server-analytic-system на дату и сверка с его срезом")
     va.add_argument("--date", default="2025-10-31")
     a = ap.parse_args(argv)
@@ -78,6 +88,33 @@ def main(argv: list[str] | None = None) -> int:
             for r in (r for r in res["rows"] if r["set"] == s_["key"]):
                 print(f"  {r['title'][:34]:34}{r['months']:5d}{r['ic']:+7.3f}{r['ic_t']:+6.1f}{r['ex']:+8.1%}{r['net']:+8.1%}"
                       f"{r['net_t']:+6.1f}{r['turnover']:8.0%}{r['dsr'].get('dsr', float('nan')):6.2f}")
+        return 0
+    if a.cmd == "book":
+        from .book import report
+        budget = [float(x) for x in a.budget.split(",")]
+        if not a.weights:
+            budget = [x / sum(budget) for x in budget]
+        res = report({"equity": a.equity, "bonds": a.bonds, "trend": a.trend, "budget": budget,
+                      "method": "weights" if a.weights else "risk", "target_vol": a.vol, "limit": a.limit,
+                      "control": a.control, "start": a.start})
+        m = res["meta"]
+        print(f"Портфель из блоков: {m['from']}..{m['to']} ({m['weeks']} нед.), предел сценария {a.limit:.0%}, "
+              f"цель {a.vol:.0%} в год, контроль: {m['control']}")
+        print(f"  {'':44}{'в год':>8}{'вол.':>7}{'Шарп':>6}{'просадка':>10}{'4 нед.':>8}{'худш. сцен.':>12}{'деньги':>8}")
+        for r in res["rows"]:
+            tail = f"{r['worst_scenario']:12.0%}{r['cash_share']:8.0%}" if r["kind"] == "book" else ""
+            print(f"  {r['title'][:44]:44}{r['cagr']:+8.1%}{r['vol']:7.1%}{r['sharpe']:6.2f}{r['dd']:10.1%}"
+                  f"{r['worst_4w']:+8.1%}" + tail)
+        t = res["tests"]
+        print("  разница Шарпа: " + ", ".join(f"против {k} {v['diff']:+.2f} (t {v['t']:+.1f})" for k, v in t.items()
+                                              if k != "book" and v))
+        td = res["today"]
+        print(f"  сегодня {td['date']}: " + ", ".join(f"{n} {w:.0%}" for n, w in zip(m["sleeves"], td["w"]))
+              + f"; худший сценарий — {td['scenarios'][0]['label']}: {-td['scenarios'][0]['loss']:+.1%}")
+        for r in res["log"][:6]:
+            what = {"rebalance": "ребалансировка", "cut": "срез", "adjust": "к цели"}[r["kind"]]
+            print(f"  {r['date']} {what}: " + ", ".join(f"{n} {w:.0%}" for n, w in zip(m["sleeves"], r["w"]))
+                  + f" · {r['scenario']} {-r['loss_before']:+.0%} → {-r['loss_after']:+.0%}")
         return 0
     if a.cmd == "valuation":
         from . import universe, valuation
