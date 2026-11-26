@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, factors, sas, sources
+from . import __version__, factors, ml, sas, sources
 from .net import NotFound
 from .presets import PRESETS
 from .rule import CONTROLS, Params
@@ -86,14 +86,7 @@ def _remember(key: str, res: dict) -> dict:
 
 @app.post("/api/factors")
 def factor_lab(req: dict) -> dict:
-    from datetime import date
-    try:
-        start = date.fromisoformat(str(req.get("start") or "2015-01-01")[:10]).isoformat()
-        top, cost = int(req.get("top", 100)), float(req.get("cost", 0.002))
-    except (TypeError, ValueError) as e:
-        raise HTTPException(400, f"параметры лаборатории: {e}") from e
-    if not 20 <= top <= 1000 or not 0 <= cost <= 0.05:
-        raise HTTPException(400, "бумаг во вселенной — от 20 до 1000, издержки — от 0 до 5% за сторону")
+    start, top, cost = _lab_params(req)
     key = "factors:" + json.dumps([start, top, cost])
     with _lock:
         if key in _results:
@@ -102,6 +95,34 @@ def factor_lab(req: dict) -> dict:
     with _factor_lock:
         try:
             res = clean(factors.lab(start, top, cost))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+    return _remember(key, res)
+
+
+def _lab_params(req: dict) -> tuple[str, int, float]:
+    from datetime import date
+    try:
+        start = date.fromisoformat(str(req.get("start") or "2015-01-01")[:10]).isoformat()
+        top, cost = int(req.get("top", 100)), float(req.get("cost", 0.002))
+    except (TypeError, ValueError) as e:
+        raise HTTPException(400, f"параметры лаборатории: {e}") from e
+    if not 20 <= top <= 1000 or not 0 <= cost <= 0.05:
+        raise HTTPException(400, "бумаг во вселенной — от 20 до 1000, издержки — от 0 до 5% за сторону")
+    return start, top, cost
+
+
+@app.post("/api/ml")
+def ml_lab(req: dict) -> dict:
+    start, top, cost = _lab_params(req)
+    key = "ml:" + json.dumps([start, top, cost])
+    with _lock:
+        if key in _results:
+            _results.move_to_end(key)
+            return _results[key]
+    with _factor_lock:
+        try:
+            res = clean(ml.lab(start, top, cost))
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
     return _remember(key, res)

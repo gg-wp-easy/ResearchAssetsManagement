@@ -24,6 +24,12 @@ def main(argv: list[str] | None = None) -> int:
     fl.add_argument("--start", default="2015-01-01")
     fl.add_argument("--top", type=int, default=100, help="самых ликвидных бумаг во вселенной")
     fl.add_argument("--cost", type=float, default=0.002, help="издержки за сторону сделки")
+    mll = sub.add_parser("ml", help="ML-прогноз доходности акций Мосбиржи (скользящее обучение)")
+    mll.add_argument("--start", default="2015-01-01")
+    mll.add_argument("--top", type=int, default=100)
+    mll.add_argument("--cost", type=float, default=0.002)
+    va = sub.add_parser("valuation", help="оценка server-analytic-system на дату и сверка с его срезом")
+    va.add_argument("--date", default="2025-10-31")
     a = ap.parse_args(argv)
 
     if a.cmd == "serve":
@@ -59,6 +65,33 @@ def main(argv: list[str] | None = None) -> int:
                   + ", ".join(f"{x['title']} {x['coef']:+.1%} (t {x['t']:+.1f})" for x in fm["rows"]))
         for w in m["warnings"]:
             print("  !", w)
+        return 0
+    if a.cmd == "ml":
+        from .ml import lab as ml_lab
+        res = ml_lab(a.start, a.top, a.cost)
+        m = res["meta"]
+        print(f"ML-прогноз: {m['top']} бумаг, издержки {m['cost']:.2%}, переобучение раз в {m['refit']} мес., "
+              f"испытаний (для DSR) {m['trials']}")
+        print(f"  {'модель':34}{'мес':>5}{'IC':>7}{'t':>6}{'Q5−все':>8}{'нетто':>8}{'t':>6}{'оборот':>8}{'DSR':>6}")
+        for s_ in res["sets"]:
+            print(f" {s_['title']}:")
+            for r in (r for r in res["rows"] if r["set"] == s_["key"]):
+                print(f"  {r['title'][:34]:34}{r['months']:5d}{r['ic']:+7.3f}{r['ic_t']:+6.1f}{r['ex']:+8.1%}{r['net']:+8.1%}"
+                      f"{r['net_t']:+6.1f}{r['turnover']:8.0%}{r['dsr'].get('dsr', float('nan')):6.2f}")
+        return 0
+    if a.cmd == "valuation":
+        from . import universe, valuation
+        p = universe.panel()
+        r = valuation.compare_with_sas(p, a.date, valuation.mcftr_weekly(p))
+        if r is None:
+            print(f"нет среза server-analytic-system на {a.date} или недели {a.date} в данных ISS", file=sys.stderr)
+            return 2
+        print(f"P/E {a.date}: у нас {r['ours']} компаний, у SAS {r['theirs']}, общих {r['common']}; "
+              f"ранговая корреляция P/E {r['multiple_rho']:.4f}, медиана отношения {r['multiple_median_ratio']:.3f}")
+        for k, v in r["analyses"].items():
+            print(f"  {k:11} ρ отклонений {v['rho']:+.3f} ({v['n']} компаний)")
+        print("  R² вне выборки: " + ", ".join(f"{k} {v:.2f}" for k, v in r["r2"].items()))
+        print("  отобранные показатели (из 5 блоков): " + ", ".join(f"{k} {v}" for k, v in r["features"].items()))
         return 0
     if a.cmd == "study":
         from .presets import PRESETS

@@ -7,6 +7,7 @@ import { Allocation, Drawdown, Regimes, Sizing } from "./sec_more";
 import { Theory } from "./Theory";
 import { About } from "./About";
 import { Factors } from "./Factors";
+import { MLPage } from "./MLPage";
 import { DEFAULT_SETTINGS, fromPreset, loadSaved, presetByKey, request, save, type Settings, type UIAsset } from "./state";
 import { applyThemeMode, savedThemeMode, type ThemeMode } from "./theme";
 import { Note } from "./ui";
@@ -18,9 +19,10 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
-function route(): { page: "explore" | "factors" | "theory" | "about"; tab: Tab } {
+function route(): { page: "explore" | "factors" | "ml" | "theory" | "about"; tab: Tab } {
   const parts = window.location.hash.replace(/^#\/?/, "").split("?")[0].split("/");
   if (parts[0] === "factors") return { page: "factors", tab: "overview" };
+  if (parts[0] === "ml") return { page: "ml", tab: "overview" };
   if (parts[0] === "theory") return { page: "theory", tab: "overview" };
   if (parts[0] === "about") return { page: "about", tab: "overview" };
   const tab = TABS.find((t) => t[0] === parts[1])?.[0] ?? "overview";
@@ -97,6 +99,7 @@ export default function App() {
         <nav className="pages" aria-label="Разделы сайта">
           <a href="#/" aria-current={nav.page === "explore" ? "page" : undefined}>Исследование</a>
           <a href="#/factors" aria-current={nav.page === "factors" ? "page" : undefined}>Факторы акций</a>
+          <a href="#/ml" aria-current={nav.page === "ml" ? "page" : undefined}>ML-прогноз</a>
           <a href="#/theory" aria-current={nav.page === "theory" ? "page" : undefined}>Теория</a>
           <a href="#/about" aria-current={nav.page === "about" ? "page" : undefined}>Исследование бота</a>
         </nav>
@@ -111,6 +114,7 @@ export default function App() {
       </header>
 
       {nav.page === "factors" && <Factors />}
+      {nav.page === "ml" && <MLPage />}
       {nav.page === "theory" && <Theory />}
       {nav.page === "about" && <About onOpen={openPreset} />}
       {nav.page === "explore" && (

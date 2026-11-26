@@ -1,13 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type FactorLab, type FactorRequest, type FactorRow } from "./api";
+import { api, type FactorLab, type FactorRequest, type FactorRow, type ValuationSummary } from "./api";
 import { axis, base, Chart, heat, legend, timeLines, type Option } from "./charts";
 import { day, num, pct } from "./format";
 import { useTheme } from "./theme";
 import { Card, Note, TableWrap, V } from "./ui";
 
-const KEY = "ram.factors.v1";
+export const LAB_KEY = "ram.factors.v1";
+const KEY = LAB_KEY;
 const DEFAULT: FactorRequest = { start: "2015-01-01", top: 100, cost: 0.002 };
-const DATA_LABEL: Record<FactorRow["data"], string> = { price: "цены", dividends: "дивиденды", reports: "отчёты" };
+export const DATA_LABEL: Record<FactorRow["data"], string> = { price: "цены", dividends: "дивиденды", reports: "отчёты",
+  valuation: "оценка SAS" };
+export const FEATURE_LABEL: Record<string, string> = {
+  roe: "ROE", roa: "ROA", npm: "чистая маржа", ebitda_margin: "маржа EBITDA", operating_margin: "операционная маржа",
+  fcf_margin: "маржа FCF", cash_conversion: "ОДП / прибыль", cash_assets: "деньги / активы", equity_assets: "капитал / активы",
+  asset_turnover: "оборачиваемость активов", roce: "ROCE", capex_revenue: "CAPEX / выручка", capex_amortization: "CAPEX / амортизация",
+  payout_ratio: "доля выплат", g: "устойчивый рост g", revenue_growth_1y: "рост выручки за год", revenue_cagr_3y: "рост выручки за 3 года",
+  profit_growth_1y: "рост прибыли за год", margin_volatility: "изменчивость маржи", profit_years_share: "доля прибыльных лет",
+  log_debt_to_equity: "ln(1 + долг / капитал)", net_debt_ebitda: "чистый долг / EBITDA", interest_coverage: "EBITDA / проценты",
+  log_revenue: "размер (ln выручки)", beta: "бета", dividend_consistency: "регулярность дивидендов",
+};
+
+export function savedLabRequest(): FactorRequest {
+  return saved();
+}
 
 function saved(): FactorRequest {
   try {
@@ -135,6 +150,8 @@ function LabResult({ r, sel, onSel, stale }: { r: FactorLab; sel: string; onSel:
 
       {f && <FactorDetail f={f} />}
 
+      {r.valuation && <ValuationCard v={r.valuation} />}
+
       {r.fm.length > 0 && (
         <Card title="Фама–Макбет: факторы вместе" sub="Каждый месяц — регрессия доходностей на ранги факторов (стандартизованные), коэффициенты усреднены по месяцам: премия за одно стандартное отклонение фактора при прочих равных, в год.">
           <div className="two">
@@ -184,7 +201,50 @@ function QBars({ q }: { q: (number | null)[] }) {
   );
 }
 
-function FactorDetail({ f }: { f: FactorRow }) {
+function ValuationCard({ v }: { v: ValuationSummary }) {
+  const t = useTheme();
+  const pe = v.multiples.pe;
+  const r2 = useMemo(() => pe ? timeLines(t, v.dates, [
+    { name: "регрессия", values: pe.r2.reg, color: t.series[0] },
+    { name: "дерево", values: pe.r2.tree, color: t.series[1] },
+    { name: "нейросеть", values: pe.r2.nn, color: t.series[2] },
+    { name: "только база отрасли", values: pe.r2.base, color: t.gray, dashed: true },
+  ], { yFmt: (x) => num(x, 1), tipFmt: (x) => num(x, 2) }) : null, [t, v, pe]);
+  const median = (xs: (number | null)[]) => {
+    const a = xs.filter((x): x is number => x !== null).sort((x, y) => x - y);
+    return a.length ? a[Math.floor(a.length / 2)] : null;
+  };
+  const ANALYSIS: Record<string, string> = { hybrid: "гибрид", regression: "регрессия", cluster: "кластеры", tree: "дерево", neural: "нейросеть" };
+  return (
+    <Card title="Оценка SAS на месячных срезах" sub={<>Конвейер server-analytic-system — справедливый мультипликатор = база отрасли с поправкой по показателям отчётности (регрессия, кластеры, дерево, нейросеть и их гибрид) — пересчитан на каждый конец месяца {day(v.dates[0])} – {day(v.dates[v.dates.length - 1])} по отчётам, опубликованным до даты. Каждую компанию оценивают модели, обученные без неё. Строки «SAS …» в таблице факторов — его отклонение ln(справедливый / фактический мультипликатор).</>}>
+      {v.parity.map((p) => (
+        <p key={p.day} className="foot">
+          Сверка с собственным срезом SAS на {day(p.day)}: {p.common} общих компаний из {p.theirs}; P/E совпадает (ранговая корреляция {num(p.multiple_rho, 4)}, медиана отношения {num(p.multiple_median_ratio, 2)}); отклонения — {Object.entries(p.analyses).map(([k, a]) => `${ANALYSIS[k] ?? k} ${num(a.rho, 2)}`).join(", ")}. Расхождение моделей — от трёх повторов кросс-валидации у SAS против одного здесь и другого списка акций.
+        </p>
+      ))}
+      <TableWrap label="Качество оценки">
+        <table className="compact">
+          <thead><tr><th>Мультипликатор</th><th className="r">Компаний</th>
+            <th className="r" title="доля разброса ln мультипликатора, объяснённая вне выборки">R² регрессии</th><th className="r">R² дерева</th>
+            <th className="r">R² нейросети</th><th className="r">R² базы отрасли</th><th className="pl">Чаще всего отобраны</th></tr></thead>
+          <tbody>{Object.entries(v.multiples).map(([k, m]) => (
+            <tr key={k}><td>{m.label}</td><td className="r">{num(median(m.n), 0)}</td>
+              <td className="r">{num(m.r2_mean.reg, 2)}</td><td className="r">{num(m.r2_mean.tree, 2)}</td>
+              <td className="r">{num(m.r2_mean.nn, 2)}</td><td className="r muted">{num(m.r2_mean.base, 2)}</td>
+              <td className="muted pl">{Object.entries(m.features).slice(0, 4).map(([f, x]) => `${FEATURE_LABEL[f] ?? f} ${pct(x, 0)}`).join(", ")}</td></tr>
+          ))}</tbody>
+        </table>
+      </TableWrap>
+      {r2 && <>
+        <h4 className="mini-title">P/E: R² вне выборки по месяцам</h4>
+        <Chart option={r2} height={220} label="Доля разброса P/E, объяснённая моделями вне выборки, по месяцам" />
+      </>}
+      <p className="foot">R² — средний по месяцам: доля разброса ln мультипликатора между компаниями, которую модель объясняет у компаний, не участвовавших в обучении. Если R² мал, «справедливый» мультипликатор почти равен отраслевому, и отклонение — это просто дешевизна относительно отрасли. В скобках у показателей — доля блоков кросс-валидации, где отбор его взял.</p>
+    </Card>
+  );
+}
+
+export function FactorDetail({ f }: { f: FactorRow }) {
   const t = useTheme();
   const S = f.series;
   const cum = useMemo(() => timeLines(t, [S.dates[0], ...S.ends], [

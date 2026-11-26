@@ -8,6 +8,7 @@ import os
 import re
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -116,3 +117,24 @@ def cached_json(key: str, fetcher: Callable[[], object], max_age_hours: float = 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"fetched": now, "value": value}, ensure_ascii=False))
     return value
+
+
+@contextmanager
+def single_thread_pool(workers: int):
+    """A process pool whose workers start fresh (spawn) with one BLAS / OpenMP thread each: forked workers inherit the
+    parent's thread pools and, side by side, oversubscribe the cores (16 minutes instead of one). The variables stay
+    set while the pool lives: it starts its workers on demand."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    names = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
+    saved = {n: os.environ.get(n) for n in names}
+    os.environ.update({n: "1" for n in names})
+    try:
+        with ProcessPoolExecutor(workers, mp_context=mp.get_context("spawn")) as pool:
+            yield pool
+    finally:
+        for n, v in saved.items():
+            if v is None:
+                os.environ.pop(n, None)
+            else:
+                os.environ[n] = v

@@ -75,10 +75,15 @@ export interface StudyResult {
 
 // ---------------------------------------------------------------------------- the factor lab (/api/factors)
 
-export interface FactorRow { key: string; title: string; data: "price" | "dividends" | "reports"; desc: string;
+export interface FactorRow { key: string; title: string; data: "price" | "dividends" | "reports" | "valuation"; desc: string;
   months: number; from: string; to: string; names: number; ic: number; ic_t: N; ic_hit: number; q: N[]; ew: number;
   ls: number; ls_t: N; ex: number; ex_t: N; net: number; net_t: N; turnover: number; sig: boolean;
-  series: { dates: string[]; ends: string[]; ic: N[]; cum: number[][] } }
+  series: { dates: string[]; ends: string[]; ic: N[]; cum: number[][]; net: N[] } }
+export interface Parity { day: string; ours: number; theirs: number; common: number; multiple_rho: N; multiple_median_ratio: N;
+  analyses: Record<string, { n: number; rho: number }> }
+export interface ValuationSummary { dates: string[]; parity: Parity[];
+  multiples: Record<string, { label: string; n: N[]; r2: Record<"reg" | "tree" | "nn" | "base", N[]>;
+    r2_mean: Record<"reg" | "tree" | "nn" | "base", N>; features: Record<string, number> }> }
 export interface FactorLab {
   meta: { from: string; to: string; months: number; top: number; cost: number; start: string; panel_from: string;
     panel_to: string; tickers: number; sas: boolean; warnings: string[]; lost_share: number };
@@ -89,6 +94,17 @@ export interface FactorLab {
     rows: { key: string; title: string; coef: number; t: N }[] }[];
   corr: { keys: string[]; titles: string[]; values: N[][] };
   testing: { k: number; bonferroni: number; hlz: number; noise_max: number };
+  valuation: ValuationSummary | null;
+  elapsed: number;
+}
+export interface MLRow extends FactorRow { set: string; set_title: string; model: string; importance: Record<string, number>;
+  inputs: string[]; dsr: { sr: number; sr0: number; trials: number; dsr: number; psr: number; months: number } | Record<string, never> }
+export interface MLLab {
+  meta: { start: string; top: number; cost: number; refit: number; trials: number; warnings: string[]; panel_to: string };
+  sets: { key: string; title: string; inputs: string[]; min_train: number }[];
+  models: { key: string; title: string }[];
+  rows: MLRow[];
+  titles: Record<string, string>;
   elapsed: number;
 }
 export interface FactorRequest { start: string; top: number; cost: number }
@@ -113,5 +129,7 @@ export const api = {
   study: (req: StudyRequest) => call<StudyResult>("/api/study", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
   factors: (req: FactorRequest) => call<FactorLab>("/api/factors", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
+  ml: (req: FactorRequest) => call<MLLab>("/api/ml", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
 };

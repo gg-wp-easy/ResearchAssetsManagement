@@ -43,6 +43,31 @@ def expected_max_sharpe(k: int, se: float) -> float:
     return se * ((1 - EULER) * sst.norm.ppf(1 - 1 / k) + EULER * sst.norm.ppf(1 - 1 / (k * math.e)))
 
 
+def deflated_sharpe(x: np.ndarray, trials: int) -> dict:
+    """Bailey and Lopez de Prado's deflated Sharpe ratio of the period returns x after `trials` strategies were tried:
+    the probability that the true Sharpe ratio is above the best one of `trials` strategies without skill would show
+    over the same T periods,
+        DSR = Phi((SR - SR0) sqrt(T - 1) / sqrt(1 - skew SR + (kurt - 1) / 4 SR^2)),
+        SR0 = sqrt(1 / T) ((1 - g) Phi^-1(1 - 1/K) + g Phi^-1(1 - 1/(K e))).
+    SR0 takes the variance of a no-skill Sharpe estimate (1/T), not the spread of the tried Sharpe ratios: the trials
+    here are different factors, not variations of one, and their spread would mostly be real differences.
+    Per-period Sharpe ratios; kurt is the raw kurtosis (3 for the normal); PSR is the same against zero."""
+    x = np.asarray(x, float)
+    x = x[np.isfinite(x)]
+    if len(x) < 12 or x.std() == 0:
+        return {}
+    T = len(x)
+    sr = float(x.mean() / x.std(ddof=1))
+    k = max(int(trials), 1)
+    sr0 = math.sqrt(1 / T) * ((1 - EULER) * sst.norm.ppf(1 - 1 / k) + EULER * sst.norm.ppf(1 - 1 / (k * math.e))) \
+        if k > 1 else 0.0
+    skew, kurt = float(sst.skew(x)), float(sst.kurtosis(x, fisher=False))
+    denom = math.sqrt(max(1 - skew * sr + (kurt - 1) / 4 * sr * sr, 1e-12))
+    return {"sr": sr, "sr0": sr0, "trials": k, "months": T,
+            "dsr": float(sst.norm.cdf((sr - sr0) * math.sqrt(T - 1) / denom)),
+            "psr": float(sst.norm.cdf(sr * math.sqrt(T - 1) / denom))}
+
+
 def compare(a: np.ndarray, b: np.ndarray, ppy: float) -> dict:
     """Two daily return series on the same days: their correlation, the Sharpe difference, its t and the years a t of 2
     would need."""

@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.stats import norm, rankdata
 
-from . import sas, sources, universe
+from . import sas, sources, universe, valuation
 from .assets import ffill_on
 
 FACTORS = [
@@ -42,17 +42,24 @@ FACTORS = [
     ("roe", "ROE", "reports", "чистая прибыль / капитал"),
     ("lowlev", "низкий долг", "reports", "минус чистый долг / EBITDA"),
     ("size", "малая капитализация", "reports", "минус логарифм капитализации"),
-]
+] + [(k, t, "valuation", "ln(справедливый мультипликатор / фактический) по модели server-analytic-system на эту дату"
+      + (": среднее гибридов P/E, P/BV, P/S и P/FCF" if k == "sas_all" else ""))
+     for k, t in valuation.FACTOR_KEYS]
 TITLE = {k: t for k, t, _, _ in FACTORS}
 MODELS = [
     ("price", "ценовые факторы", ["mom", "rev", "lowvol", "illiq"]),
     ("all", "все вместе", ["mom", "rev", "lowvol", "illiq", "dy", "ep", "bp", "roe", "size"]),
+    ("sas", "оценка SAS против дешевизны", ["ep", "bp", "sp", "sas_pe", "sas_all"]),
 ]
 WEEKS_YEAR, WEEKS_MONTH = 52, 4
 
 
 def month_ends(dates: list[str]) -> list[int]:
     return [i for i in range(len(dates)) if i == len(dates) - 1 or dates[i + 1][:7] != dates[i][:7]]
+
+
+def _num(x) -> float:
+    return float(x) if x is not None and math.isfinite(float(x)) else math.nan
 
 
 def class_tickers(page: str, traded: set[str]) -> tuple[str, str]:
@@ -72,7 +79,8 @@ class Month:
     f: dict[str, np.ndarray]
 
 
-def build_months(p: universe.Panel, start: str, top: int) -> tuple[list[Month], list[str]]:
+def build_months(p: universe.Panel, start: str, top: int, with_valuation: bool = True,
+                 extra: dict | None = None) -> tuple[list[Month], list[str]]:
     warnings: list[str] = []
     T, N = p.R.shape
     logg = np.log1p(np.nan_to_num(p.R))
@@ -93,6 +101,10 @@ def build_months(p: universe.Panel, start: str, top: int) -> tuple[list[Month], 
         warnings.append("нет дивидендов server-analytic-system: доходность без дивидендов, дивидендного фактора нет")
     col = {tk: j for j, tk in enumerate(p.tickers)}
     ends = month_ends(p.dates)
+    vals = valuation.valuations(p, [t for t in ends[:-1] if p.dates[t] >= start], M) if reps and with_valuation else {}
+    gaps = {day: valuation.ticker_gaps(res) for day, res in vals.items()}
+    if extra is not None:
+        extra["valuations"] = vals
     months: list[Month] = []
     div_from = sas.DIVIDENDS_FROM
     for k in range(len(ends) - 1):
@@ -132,8 +144,30 @@ def build_months(p: universe.Panel, start: str, top: int) -> tuple[list[Month], 
             f["dy"] = np.where(p.covered[cols], dsum / p.P[t, cols], np.nan)
         if reps:
             f.update(report_factors(p, t, cols, reps, col))
+        if p.dates[t] in gaps:
+            g = gaps[p.dates[t]]
+            for key, _ in valuation.FACTOR_KEYS:
+                f[key] = np.array([_num(g.get(p.tickers[j], {}).get(key)) for j in cols])
         months.append(Month(t=t, u=u, cols=cols, fwd=fwd, f=f))
     return months, warnings
+
+
+def company_cap(p: universe.Panel, t: int, rep: sas.Report, ticker: str, col: dict[str, int], traded: set[str]) -> float:
+    """Market cap of the company on week t: smart-lab's share counts of each class (today's count) times the class's
+    price on today's count; a class off the board at the other's price (Transneft's ordinary shares), as smart-lab
+    counts it. NaN without the ordinary count or when it disagrees tenfold with smart-lab's own market cap (a unit
+    slip in the share count)."""
+    o, pr = class_tickers(rep.page or ticker, traded)
+    price = {x: p.P[t, col[x]] for x in (o, pr) if x in col and np.isfinite(p.P[t, col[x]])}
+    po, pp = price.get(o, price.get(pr)), price.get(pr, price.get(o))
+    n_o, n_p = rep.get("number_of_shares"), rep.get("number_of_priv_shares")
+    if po is None or not n_o > 0:
+        return math.nan
+    cap = n_o * po + (n_p * pp if n_p > 0 and pp is not None else 0.0)
+    own = rep.get("market_cap")
+    if own > 0 and not 0.1 < cap / own < 10:
+        return math.nan
+    return cap
 
 
 def report_factors(p: universe.Panel, t: int, cols: np.ndarray, reps: dict, col: dict[str, int]) -> dict[str, np.ndarray]:
@@ -145,15 +179,8 @@ def report_factors(p: universe.Panel, t: int, cols: np.ndarray, reps: dict, col:
         rep = sas.report_as_of(reps.get(ticker, []), day)
         if rep is None:
             continue
-        o, pr = class_tickers(rep.page or ticker, traded)
-        price = {x: p.P[t, col[x]] for x in (o, pr) if x in col and np.isfinite(p.P[t, col[x]])}
-        po, pp = price.get(o, price.get(pr)), price.get(pr, price.get(o))  # a class off the board at the other's price
-        n_o, n_p = rep.get("number_of_shares"), rep.get("number_of_priv_shares")
-        if po is None or not n_o > 0:
-            continue
-        cap = n_o * po + (n_p * pp if n_p > 0 and pp is not None else 0.0)
-        own = rep.get("market_cap")
-        if own > 0 and not 0.1 < cap / own < 10:  # a unit slip in smart-lab's share count
+        cap = company_cap(p, t, rep, ticker, col, traded)
+        if not cap > 0:
             continue
         ni, book = rep.get("net_income"), rep.get("net_assets", "book_value", "capital")
         rev, fcf = rep.get("revenue"), rep.get("fcf")
@@ -180,7 +207,8 @@ def _t(x: np.ndarray) -> float:
     return float(x.mean() / x.std(ddof=1) * math.sqrt(len(x))) if len(x) > 2 and x.std(ddof=1) > 0 else math.nan
 
 
-def evaluate(months: list[Month], dates: list[str], tickers: list[str], key: str, cost: float, min_names: int = 20) -> dict | None:
+def evaluate(months: list[Month], dates: list[str], tickers: list[str], key: str, cost: float, min_names: int = 20,
+             title: str | None = None) -> dict | None:
     rows = []
     prev: set[str] | None = None
     for m in months:
@@ -210,13 +238,14 @@ def evaluate(months: list[Month], dates: list[str], tickers: list[str], key: str
     net = ex - 2 * cost * np.r_[1.0, turn]
     cum = [np.cumprod(1 + np.nan_to_num(Q[:, g])).tolist() for g in range(5)] + [np.cumprod(1 + ew).tolist()]
     return {
-        "key": key, "title": TITLE[key], "months": len(rows), "from": rows[0]["date"], "to": rows[-1]["date"],
+        "key": key, "title": title or TITLE.get(key, key), "months": len(rows), "from": rows[0]["date"], "to": rows[-1]["date"],
         "names": float(np.mean([x["n"] for x in rows])),
         "ic": float(np.nanmean(ic)), "ic_t": _t(ic), "ic_hit": float(np.mean(ic[np.isfinite(ic)] > 0)),
         "q": (np.nanmean(Q, axis=0) * 12).tolist(), "ew": float(ew.mean() * 12),
         "ls": float(np.nanmean(ls) * 12), "ls_t": _t(ls), "ex": float(np.nanmean(ex) * 12), "ex_t": _t(ex),
         "net": float(np.nanmean(net) * 12), "net_t": _t(net), "turnover": float(turn.mean()),
-        "series": {"dates": [x["date"] for x in rows], "ends": [x["end"] for x in rows], "ic": ic.tolist(), "cum": cum},
+        "series": {"dates": [x["date"] for x in rows], "ends": [x["end"] for x in rows], "ic": ic.tolist(), "cum": cum,
+                   "net": net.tolist()},
     }
 
 
@@ -270,7 +299,8 @@ def correlations(months: list[Month], keys: list[str]) -> list[list[float | None
 def lab(start: str = "2015-01-01", top: int = 100, cost: float = 0.002) -> dict:
     t0 = time.time()
     p = universe.panel()
-    months, warnings = build_months(p, start, top)
+    extra: dict = {}
+    months, warnings = build_months(p, start, top, extra=extra)
     if not months:
         raise ValueError("нет ни одного месяца с данными: начните позже или возьмите больше бумаг")
     results = [r for r in (evaluate(months, p.dates, p.tickers, k, cost) for k, *_ in FACTORS) if r]
@@ -304,5 +334,6 @@ def lab(start: str = "2015-01-01", top: int = 100, cost: float = 0.002) -> dict:
                if (fm := fama_macbeth(months, p.dates, [x for x in ks if x in keys]))],
         "corr": {"keys": keys, "titles": [TITLE[x] for x in keys], "values": correlations(months, keys)},
         "testing": {"k": k, "bonferroni": bonferroni, "hlz": 3.0, "noise_max": noise_max},
+        "valuation": valuation.summary(extra["valuations"]) if extra.get("valuations") else None,
         "elapsed": time.time() - t0,
     }

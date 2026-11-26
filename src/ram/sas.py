@@ -79,6 +79,19 @@ def dividends() -> dict[str, list[Dividend]] | None:
 DIVIDENDS_FROM = "2019-01-01"  # T-Invest's history starts here: earlier payments are unknown, not absent
 
 
+def sectors() -> dict[str, str]:
+    """Ticker -> T-Invest sector (utilities, financial ...) from the latest valuation snapshot of the folder."""
+    root = sas_dir()
+    if root is None:
+        return {}
+    snaps = sorted(root.glob("stock_snapshot_*/snapshot.csv"))
+    if not snaps:
+        return {}
+    name = str(snaps[-1].relative_to(root))
+    return _read(name, lambda rows: {r["Тикер"].strip().upper(): (r.get("sector") or "other") for r in rows
+                                     if r.get("Тикер")}) or {}
+
+
 def covered() -> set[str]:
     """Tickers of server-analytic-system's share list (today's rouble shares of T-Invest): their dividends are known
     from 2019; a share outside it (delisted, say) may have paid without a trace here."""
