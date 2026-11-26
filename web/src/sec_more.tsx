@@ -138,9 +138,12 @@ export function Allocation({ r, slots }: P) {
   const t = useTheme();
   const A = r.allocation;
   const [method, setMethod] = useState("erc");
-  const colors = [t.series[0], t.series[1], t.series[2], t.series[3], t.series[4], t.series[6], t.series[7], t.gray];
+  const pf = r.meta.mode === "portfolio";
+  // the book first colour; the two naive ones gray (holding dashed); the methods the rest of the palette, in a fixed order
+  const color: Record<string, string> = { book: t.series[0], equal: t.gray, hold: t.gray, inv_vol: t.series[1], erc: t.series[2],
+    hrp: t.series[3], min_var: t.series[4], min_cvar: t.series[5], max_sharpe: t.series[6], given: t.series[7] };
   const eq = useMemo(() => A.error ? null : timeLines(t, A.equity.dates, A.rows.map((row, i) => ({ name: row.title, values: A.equity.values[i],
-    color: colors[i], width: row.key === "book" ? 2.5 : 1.5 })), { log: true, zoom: true, yFmt: (v) => num(v, v < 10 ? 1 : 0), tipFmt: (v) => num(v, 2) }),
+    color: color[row.key] ?? t.gray, dashed: row.key === "hold", width: row.key === "book" ? 2.5 : 1.5 })), { log: true, zoom: true, yFmt: (v) => num(v, v < 10 ? 1 : 0), tipFmt: (v) => num(v, 2) }),
   [t, A]); // eslint-disable-line react-hooks/exhaustive-deps
   const hist = A.history?.[method] ?? [];
   const wopt = useMemo((): Option | null => {
@@ -158,7 +161,7 @@ export function Allocation({ r, slots }: P) {
   if (A.error) return <Note kind="warn">{A.error}</Note>;
   return (
     <>
-      <Card title="Распределение капитала" sub={<>Только лонг, весь капитал в активах, оценка на последних {A.window_weeks} неделях, держим {A.hold_weeks} недель и пересчитываем: каждая доходность — вне выборки. {day(A.from)} – {day(A.to)}. Для сравнения — правило тренда и «держать».</>}>
+      <Card title="Распределение капитала" sub={<>Только лонг, весь капитал в активах, оценка на последних {A.window_weeks} неделях, держим {A.hold_weeks} недель и пересчитываем: каждая доходность — вне выборки. {day(A.from)} – {day(A.to)}. {pf ? "Для сравнения — сам портфель с заданными весами." : "Для сравнения — правило тренда и «держать»."} Ковариация {A.cov === "shrunk" ? <>сжата к постоянной корреляции (Ледуа–Вольф){A.shrinkage !== null ? <>, интенсивность в среднем {num(A.shrinkage, 2)}</> : null}</> : "выборочная"}.</>}>
         <TableWrap label="Методы распределения">
           <table className="compact">
             <thead><tr><th>Метод</th><th className="r">В год</th><th className="r">Вол.</th><th className="r">Шарп</th><th className="r">Просадка</th>
@@ -177,10 +180,10 @@ export function Allocation({ r, slots }: P) {
       </Card>
       {eq && <Card title="Капитал"><Chart option={eq} height={320} label="Капитал методов распределения" /></Card>}
       <Card title="Веса во времени">
-        <Segmented value={method} onChange={setMethod} label="Метод" options={[{ value: "erc", label: "паритет риска" }, { value: "min_cvar", label: "минимум CVaR" }, { value: "max_sharpe", label: "максимум Шарпа" }]} />
+        <Segmented value={method} onChange={setMethod} label="Метод" options={[{ value: "erc", label: "паритет риска" }, { value: "hrp", label: "HRP" }, { value: "min_cvar", label: "минимум CVaR" }, { value: "max_sharpe", label: "максимум Шарпа" }]} />
         {wopt && <Chart option={wopt} height={260} label="Веса активов при каждом пересчёте" />}
       </Card>
-      <Note>Минимум CVaR — линейная программа Рокафеллара–Урясева по неделям окна: min ζ + Σu<sub>s</sub>/((1−α)S) при u<sub>s</sub> ≥ −wᵀr<sub>s</sub> − ζ, u<sub>s</sub> ≥ 0. Паритет риска — равные вклады w<sub>i</sub>(Σw)<sub>i</sub>.</Note>
+      <Note>Минимум CVaR — линейная программа Рокафеллара–Урясева по неделям окна: min ζ + Σu<sub>s</sub>/((1−α)S) при u<sub>s</sub> ≥ −wᵀr<sub>s</sub> − ζ, u<sub>s</sub> ≥ 0. Паритет риска — равные вклады w<sub>i</sub>(Σw)<sub>i</sub>. HRP (Лопес де Прадо) — дерево по расстоянию √((1−ρ)/2), вес делится сверху вниз обратно дисперсии половин: без обращения матрицы, поэтому шум ковариации вредит меньше.</Note>
     </>
   );
 }
@@ -261,7 +264,7 @@ export function Sizing({ r }: P) {
           <table className="compact">
             <thead><tr><th>Сравнение</th><th className="r">Корреляция</th><th className="r">Шарп</th><th className="r">Разница</th><th className="r">t</th><th className="r">Лет до t = 2</th></tr></thead>
             <tbody>
-              {H && <tr><td>правило против «держать»</td><td className="r">{num(H.rho, 2)}</td><td className="r">{num(H.sr_a, 2)} / {num(H.sr_b, 2)}</td>
+              {H && <tr><td>{r.meta.mode === "portfolio" ? "портфель против «поровну»" : "правило против «держать»"}</td><td className="r">{num(H.rho, 2)}</td><td className="r">{num(H.sr_a, 2)} / {num(H.sr_b, 2)}</td>
                 <td className="r"><V x={H.diff} f={(x) => num(x, 2, true)} /></td><td className="r">{num(H.t, 1)}</td><td className="r">{num(H.years_needed, 0)}</td></tr>}
               {B && <tr><td>выбранный контроль против без контроля</td><td className="r">{num(B.rho, 2)}</td><td className="r">{num(B.sr_a, 2)} / {num(B.sr_b, 2)}</td>
                 <td className="r"><V x={B.diff} f={(x) => num(x, 2, true)} /></td><td className="r">{num(B.t, 1)}</td><td className="r">{num(B.years_needed, 0)}</td></tr>}

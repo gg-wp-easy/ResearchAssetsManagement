@@ -129,7 +129,7 @@ code { font-family: var(--font-mono); font-size: 0.86em; }
 .assets { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.45rem; }
 .asset { border: 1px solid var(--rule); border-radius: 7px; padding: 0.45rem 0.5rem; background: var(--sheet-2); }
 .asset-head { display: flex; align-items: center; gap: 0.35rem; }
-.asset-label { flex: 1; min-width: 0; border: 0; background: transparent; font-weight: 500; padding: 0.1rem 0.2rem; border-radius: 4px; }
+.asset-label { flex: 1; min-width: 0; width: 0; border: 0; background: transparent; font-weight: 500; padding: 0.1rem 0.2rem; border-radius: 4px; }
 .asset-label:hover, .asset-label:focus { background: var(--sheet); }
 .asset-sub { font-size: 0.74rem; color: var(--ink-3); padding-left: 1.3rem; overflow-wrap: anywhere; }
 .tags { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; margin-left: 0.3rem; }
@@ -257,3 +257,30 @@ ol.path li::marker { color: var(--accent); font-weight: 600; }
   .doc-head h1 { font-size: 1.8rem; }
   .intro h1 { font-size: 1.5rem; }
 }
+
+/* ---------------------------------------------------------------- portfolio weights, the factor lab */
+.asset-weight { display: inline-flex; align-items: center; gap: 0.15rem; font-size: 0.8rem; color: var(--ink-3); flex: none; }
+.asset-weight input { width: 3.6rem; padding: 0.15rem 0.3rem; text-align: right; font-variant-numeric: tabular-nums; border: 1px solid var(--rule); border-radius: 5px; background: var(--sheet); }
+.asset-wline { display: flex; align-items: center; gap: 0.35rem; padding-left: 1.3rem; font-size: 0.8rem; color: var(--ink-3); margin: 0.15rem 0; }
+.panel > *, .assets > li { min-width: 0; }
+.weights-sum { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.8rem; margin-top: 0.5rem; }
+.warn-text { color: var(--neg); }
+.ghost.small { padding: 0.2rem 0.6rem; font-size: 0.8rem; }
+.lab { padding-block: 1.2rem 3rem; display: grid; gap: 1rem; max-width: 1280px; margin: 0 auto; width: 100%; box-sizing: border-box; padding-inline: 16px; }
+.lab-head h1 { margin: 0 0 0.3rem; font-size: 1.5rem; }
+.lab-head p { margin: 0; color: var(--ink-2); max-width: 70ch; }
+.lab-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.8rem 1.2rem; }
+.lab-controls .field { min-width: 9rem; }
+tr.pick { cursor: pointer; }
+tr.pick:hover td { background: var(--sheet-2); }
+tr.pick.sel td { background: var(--accent-soft); }
+.data-tag { font-size: 0.7rem; border: 1px solid var(--rule); border-radius: 4px; padding: 0 0.3rem; color: var(--ink-3); margin-left: 0.35rem; white-space: nowrap; }
+.qbars { display: inline-flex; align-items: flex-end; gap: 2px; height: 22px; vertical-align: middle; }
+.qbars i { display: block; width: 7px; border-radius: 2px 2px 0 0; background: var(--s1); }
+.qbars i.neg { background: var(--s8); border-radius: 0 0 2px 2px; align-self: flex-start; }
+.qbars-wrap { display: inline-flex; flex-direction: column; height: 22px; justify-content: center; }
+.sig { font-weight: 600; }
+.sig-mark { color: var(--accent); margin-left: 0.2rem; }
+.stale { opacity: 0.6; transition: opacity 0.2s; }
+.lab > div { display: grid; gap: 1rem; }
+.mini-title { margin: 0.6rem 0 0.2rem; font-size: 0.82rem; font-weight: 600; color: var(--ink-2); }

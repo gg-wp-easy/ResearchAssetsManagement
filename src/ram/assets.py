@@ -6,11 +6,12 @@
   position is simply held.
 - Carry (what the long pays, annual): rub = RUONIA (8% before 2010, as the bot's research assumed), usd = 13-week
   T-bill, rub-usd = their difference (a USD/RUB forward), fixed = only the offset, none = nothing. carry_offset is added
-  (the yuan's long pays RUONIA - 2.5%; a share's dividend yield is a negative offset). Futures already hold their carry.
+  (the yuan's long pays RUONIA - 2.5%). Futures already hold their carry.
 """
 from __future__ import annotations
 
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields
 from datetime import date
 
@@ -34,6 +35,7 @@ class AssetSpec:
     short_cap: float = 1.0  # the largest short, share of the full size: 1 = no limit, 0 = long only
     vol_floor: float = 0.0  # the size is never figured from a lower annual volatility
     cbr: bool = False  # halve the position the evening before a Bank of Russia rate decision
+    weight: float = 0.0  # share of the capital in a portfolio with given weights (signal "weights")
 
     @staticmethod
     def from_dict(d: dict) -> "AssetSpec":
@@ -43,6 +45,7 @@ class AssetSpec:
             raise ValueError(f"ставка удержания {spec.carry!r}: одна из {', '.join(CARRIES)}")
         spec.short_cap = float(min(1.0, max(0.0, spec.short_cap)))
         spec.go = float(max(0.0, spec.go))
+        spec.weight = float(max(0.0, spec.weight))
         return spec
 
 
@@ -104,6 +107,19 @@ def despike(days: list[str], px: np.ndarray, k: float = 8.0, back: float = 0.25,
     return [d for d, k_ in zip(days, keep) if k_], px[keep], int(bad.sum())
 
 
+def prefetch(ids: list[str]) -> None:
+    """Load the series side by side (a first MOEX load takes tens of seconds); errors surface in `build`."""
+    def one(i: str) -> None:
+        try:
+            sources.load(i)
+        except Exception:
+            pass
+    todo = list(dict.fromkeys(ids))
+    if len(todo) > 1:
+        with ThreadPoolExecutor(min(4, len(todo))) as pool:
+            list(pool.map(one, todo))
+
+
 def _weekdays(s: Series) -> tuple[list[str], np.ndarray]:
     keep = [i for i, d in enumerate(s.dates) if date.fromisoformat(d).weekday() < 5]
     return [s.dates[i] for i in keep], s.values[keep]
@@ -153,6 +169,7 @@ def build(specs: list[AssetSpec], history_from: str | None = None, history_to: s
     if not specs:
         raise ValueError("корзина пуста")
     warnings: list[str] = []
+    prefetch([s.id for s in specs])
     own: list[tuple[list[str], np.ndarray, np.ndarray]] = []
     info, labels, names = [], [], []
     for spec in specs:

@@ -41,7 +41,9 @@ export function Crises({ r, slots }: P) {
             </tbody>
           </table>
         </TableWrap>
-        <p className="foot">В ячейке актива — его движение за окно (избыточная доходность) и мелко — позиция правила на входе. Тренд держит направление кризиса, если оно уже началось; больно — когда разворот приходит сразу.</p>
+        <p className="foot">{r.meta.mode === "portfolio"
+          ? "В ячейке актива — его движение за окно (избыточная доходность) и мелко — вес на входе. Пустая ячейка — бумаги ещё не было на бирже, её вес был у остальных."
+          : "В ячейке актива — его движение за окно (избыточная доходность) и мелко — позиция правила на входе. Тренд держит направление кризиса, если оно уже началось; больно — когда разворот приходит сразу."}</p>
       </Card>
     </>
   );
@@ -78,6 +80,7 @@ function severity(moneyLoss: number): { cls: string; tag: string } {
 export function Scenarios({ r, slots }: P) {
   const S = r.scenarios;
   const n = r.meta.labels.length;
+  const pf = r.meta.mode === "portfolio";
   const [risk, setRisk] = useState(S.risk);
   const [hyp, setHyp] = useState(() => S.hypothetical.map((h) => ({ label: h.label, moves: h.moves.map((m) => m * 100) })));
   useEffect(() => { setHyp(S.hypothetical.map((h) => ({ label: h.label, moves: h.moves.map((m) => m * 100) }))); setRisk(S.risk); }, [S]);
@@ -86,10 +89,10 @@ export function Scenarios({ r, slots }: P) {
     const k = risk / S.risk;
     const full = S.full.map((f) => (isNum(f) ? f * k : 0));
     return [
-      { name: "позиции правила", kind: "rule", notional: capped(full.map((f, j) => f * S.weights[j]), S.go, S.margin_cap) },
-      { name: "худший знак", kind: "worst", notional: capped(full, S.go, S.margin_cap) },
+      { name: pf ? "позиции портфеля" : "позиции правила", kind: "rule", notional: capped(full.map((f, j) => f * S.weights[j]), S.go, S.margin_cap) },
+      ...(pf ? [] : [{ name: "худший знак", kind: "worst" as const, notional: capped(full, S.go, S.margin_cap) }]),
     ];
-  }, [risk, S]);
+  }, [risk, S, pf]);
   const six: N[] = S.sigma_day.map((s) => (isNum(s) ? 6 * s : null));
   const groups: { title: string; rows: { label: string; moves: N[][]; sixSigma?: boolean }[] }[] = [
     { title: "исторические совместные движения", rows: S.historical },
@@ -98,42 +101,48 @@ export function Scenarios({ r, slots }: P) {
   ];
   const cell = (b: Book, row: { moves: N[][]; sixSigma?: boolean }) => {
     const v = row.sixSigma ? -b.notional.reduce((s, w, j) => s + Math.abs(w) * (six[j] ?? 0), 0) : loss(b, row.moves);
-    const money = v / ms;
+    const money = pf ? v : v / ms;
     const sev = severity(money);
     return (
       <td className={"r nowrap " + sev.cls}>
-        <V x={v} f={(x) => pct(x, 1, true)} eps={0.0005} /> <span className="muted">({pct(money, 0, true)})</span>
+        <V x={v} f={(x) => pct(x, 1, true)} eps={0.0005} />{!pf && <> <span className="muted">({pct(money, 0, true)})</span></>}
         {sev.tag && <span className="sev-tag">{sev.tag === "ниже нуля" ? "⛔ " : "⚠ "}{sev.tag}</span>}
       </td>
     );
   };
   return (
     <>
-      <Card title="Сегодняшние позиции" sub={<>Размер — от волатильности на {day(S.date)}: спокойный рынок даёт большие позиции, и тот же шок стоит дороже. Предел ГО — {pct(S.margin_cap, 0)} капитала.</>}>
+      <Card title={pf ? "Сегодняшние веса" : "Сегодняшние позиции"} sub={pf
+        ? <>Веса на {day(S.date)}, доля капитала; σ дня — по волатильности последних месяцев.</>
+        : <>Размер — от волатильности на {day(S.date)}: спокойный рынок даёт большие позиции, и тот же шок стоит дороже. Предел ГО — {pct(S.margin_cap, 0)} капитала.</>}>
         <TableWrap label="Позиции">
           <table className="compact">
-            <thead><tr><th>Актив</th><th className="r">Вол. сейчас</th><th className="r">σ дня</th><th className="r">Полная позиция</th>
-              <th className="r">Сила правила</th><th className="r">Позиция правила</th><th className="r">ГО</th></tr></thead>
+            <thead><tr><th>Актив</th><th className="r">Вол. сейчас</th><th className="r">σ дня</th>
+              {pf ? <th className="r">Вес</th> : <><th className="r">Полная позиция</th>
+                <th className="r">Сила правила</th><th className="r">Позиция правила</th><th className="r">ГО</th></>}</tr></thead>
             <tbody>{r.meta.labels.map((l, j) => (
               <tr key={j}><td><AssetName label={l} slot={slots[j]} /></td><td className="r">{pct(S.vol_now[j], 0)}</td>
-                <td className="r">{pct(S.sigma_day[j], 2)}</td><td className="r">{num(books[1].notional[j], 2)}</td>
-                <td className="r"><V x={S.weights[j]} f={(x) => num(x, 2, true)} /></td>
-                <td className="r"><V x={books[0].notional[j]} f={(x) => num(x, 2, true)} /></td><td className="r">{pct(S.go[j], 0)}</td></tr>
+                <td className="r">{pct(S.sigma_day[j], 2)}</td>
+                {pf ? <td className="r">{pct(books[0].notional[j], 1)}</td> : <><td className="r">{num(books[1].notional[j], 2)}</td>
+                  <td className="r"><V x={S.weights[j]} f={(x) => num(x, 2, true)} /></td>
+                  <td className="r"><V x={books[0].notional[j]} f={(x) => num(x, 2, true)} /></td><td className="r">{pct(S.go[j], 0)}</td></>}</tr>
             ))}</tbody>
           </table>
         </TableWrap>
-        <div className="row-gap">
+        {!pf && <div className="row-gap">
           <span className="label">Риск на актив:</span>
           <Segmented value={risk} onChange={setRisk} label="Риск" options={S.risks.map((x) => ({ value: x, label: pct(x, x < 0.1 ? 1 : 0) }))} />
-        </div>
+        </div>}
       </Card>
-      <Card title="Убыток счёта в сценариях" sub={<>Доля суммы для торговли; в скобках — доля денег на брокерском счёте реального счёта (там лежит {pct(ms, 0)} суммы). «Худший знак» — каждая полная позиция на неудачной стороне. В длинных окнах взяты худшие 5 дней внутри.</>}>
+      <Card title={pf ? "Убыток портфеля в сценариях" : "Убыток счёта в сценариях"} sub={pf
+        ? <>Доля капитала. В длинных окнах взяты худшие 5 дней внутри.</>
+        : <>Доля суммы для торговли; в скобках — доля денег на брокерском счёте реального счёта (там лежит {pct(ms, 0)} суммы). «Худший знак» — каждая полная позиция на неудачной стороне. В длинных окнах взяты худшие 5 дней внутри.</>}>
         <TableWrap label="Сценарии">
           <table className="compact">
             <thead><tr><th>Сценарий</th>{books.map((b) => <th key={b.name} className="r">{b.name}</th>)}</tr></thead>
             {groups.map((g) => (
               <tbody key={g.title}>
-                <tr className="group"><td colSpan={3}>{g.title}</td></tr>
+                <tr className="group"><td colSpan={books.length + 1}>{g.title}</td></tr>
                 {g.rows.map((row) => <tr key={row.label}><td>{row.label}</td>{books.map((b) => <Fragment key={b.name}>{cell(b, row)}</Fragment>)}</tr>)}
               </tbody>
             ))}

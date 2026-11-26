@@ -3,6 +3,7 @@ import { api, type Meta, type SearchHit } from "./api";
 import { ASSET_DEFAULTS, freeSlot, type Settings, type UIAsset } from "./state";
 import { day, num, pct } from "./format";
 import { slotColor, useTheme } from "./theme";
+import { Segmented } from "./ui";
 
 const WINDOWS = [10, 20, 40, 60, 120, 250];
 
@@ -12,6 +13,8 @@ export function Basket(props: {
 }) {
   const { meta, assets, settings, onAssets, onSettings } = props;
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => onSettings({ ...settings, [k]: v });
+  const portfolio = settings.signal === "weights";
+  const total = assets.reduce((s, a) => s + (a.weight || 0), 0);
 
   return (
     <aside className="side" aria-label="Корзина и параметры">
@@ -28,17 +31,26 @@ export function Basket(props: {
         {assets.length === 0 && <p className="hint">Найдите актив по названию или коду (SBER, GLD, BTC-USD, BR, юань) либо выберите готовый набор.</p>}
         <ol className="assets">
           {assets.map((a, i) => (
-            <AssetRow key={a.id + i} a={a} meta={meta}
+            <AssetRow key={a.id + i} a={a} meta={meta} portfolio={portfolio}
               onChange={(next) => onAssets(assets.map((x, k) => (k === i ? next : x)))}
               onRemove={() => onAssets(assets.filter((_, k) => k !== i))}
               onUp={i > 0 ? () => { const n = [...assets]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; onAssets(n); } : undefined} />
           ))}
         </ol>
+        {portfolio && assets.length > 0 && (
+          <div className="weights-sum">
+            <span className={Math.abs(total - 1) > 0.005 ? "warn-text" : "muted"}>сумма весов {pct(total, 1)}{Math.abs(total - 1) > 0.005 ? " — приведётся к 100%" : ""}</span>
+            <button type="button" className="ghost small" onClick={() => onAssets(assets.map((a) => ({ ...a, weight: 1 / assets.length })))}>поровну</button>
+          </div>
+        )}
       </section>
 
       <section className="panel">
-        <h2 className="panel-title">Правило тренда</h2>
-        <div className="grid2">
+        <h2 className="panel-title">{portfolio ? "Портфель" : "Правило тренда"}</h2>
+        <Segmented value={settings.signal} onChange={(v) => set("signal", v)} label="Что считаем"
+          options={[{ value: "trend", label: "правило тренда" }, { value: "weights", label: "портфель с весами" }]} />
+        {portfolio && <p className="hint">Каждый день у актива его вес капитала; пока бумаги нет на бирже, её вес делится между остальными. Контроль просадки и издержки — как у правила.</p>}
+        {!portfolio && <div className="grid2">
           <NumField label="Риск на актив" value={settings.risk * 100} step={0.5} min={0.5} max={100} suffix="%"
             onChange={(v) => set("risk", v / 100)} hint="годовая волатильность полной позиции, доля капитала" />
           <label className="field">
@@ -49,8 +61,8 @@ export function Basket(props: {
               <option value={20}>20 дней (бот)</option>
             </select>
           </label>
-        </div>
-        <div className="field">
+        </div>}
+        {!portfolio && <div className="field">
           <span>Окна тренда, дней <small>(несколько — среднее силы)</small></span>
           <div className="chips" role="group" aria-label="Окна тренда">
             {WINDOWS.map((w) => {
@@ -64,7 +76,7 @@ export function Basket(props: {
               );
             })}
           </div>
-        </div>
+        </div>}
         <label className="field">
           <span>Контроль просадки</span>
           <select value={settings.control} onChange={(e) => set("control", Number(e.target.value))}>
@@ -94,6 +106,13 @@ export function Basket(props: {
             <label className="field">
               <span>История с</span>
               <input type="date" value={settings.history_from} onChange={(e) => set("history_from", e.target.value)} />
+            </label>
+            <label className="field" title="для вкладки «Распределение»">
+              <span>Ковариация</span>
+              <select value={settings.cov} onChange={(e) => set("cov", e.target.value as Settings["cov"])}>
+                <option value="shrunk">сжатая (Ледуа–Вольф)</option>
+                <option value="sample">выборочная</option>
+              </select>
             </label>
           </div>
         </details>
@@ -196,8 +215,8 @@ function shortLabel(h: SearchHit): string {
   return n.length > 28 ? h.code : n;
 }
 
-function AssetRow({ a, meta, onChange, onRemove, onUp }: {
-  a: UIAsset; meta: Meta | null; onChange: (a: UIAsset) => void; onRemove: () => void; onUp?: () => void;
+function AssetRow({ a, meta, portfolio, onChange, onRemove, onUp }: {
+  a: UIAsset; meta: Meta | null; portfolio: boolean; onChange: (a: UIAsset) => void; onRemove: () => void; onUp?: () => void;
 }) {
   const t = useTheme();
   const [open, setOpen] = useState(false);
@@ -214,6 +233,8 @@ function AssetRow({ a, meta, onChange, onRemove, onUp }: {
         {onUp && <button type="button" className="icon" aria-label="Выше" title="Выше" onClick={onUp}>↑</button>}
         <button type="button" className="icon" aria-label="Убрать" title="Убрать" onClick={onRemove}>×</button>
       </div>
+      {portfolio && <div className="asset-wline"><span>вес</span>
+        <WeightInput value={a.weight} onChange={(v) => set("weight", v)} label={`Вес: ${a.label || a.id}`} /><span>капитала</span></div>}
       <div className="asset-sub">
         <code>{a.id}</code>
         {a.info && <span> · {day(a.info.first)}–{day(a.info.last)}{a.info.currency !== "RUB" ? ` · ${a.info.currency}` : ""}</span>}
@@ -240,7 +261,7 @@ function AssetRow({ a, meta, onChange, onRemove, onUp }: {
               </select>
             </label>
             <NumField label="Поправка ставки" value={a.carry_offset * 100} step={0.5} min={-30} max={30} suffix="%"
-              onChange={(v) => set("carry_offset", v / 100)} hint="−2,5% у юаня; −8% ≈ дивиденды акции" />
+              onChange={(v) => set("carry_offset", v / 100)} hint="например, −2,5% у юаня" />
             <NumField label="ГО" value={a.go * 100} step={1} min={0} max={100} suffix="%" onChange={(v) => set("go", v / 100)}
               hint="гарантийное обеспечение, доля номинала" />
             <label className="field">
@@ -261,6 +282,21 @@ function AssetRow({ a, meta, onChange, onRemove, onUp }: {
         </div>
       )}
     </li>
+  );
+}
+
+function WeightInput({ value, onChange, label }: { value: number; onChange: (v: number) => void; label: string }) {
+  const [text, setText] = useState(String(round(value * 100)));
+  useEffect(() => setText(String(round(value * 100))), [value]);
+  return (
+    <span className="asset-weight" title="вес в портфеле, % капитала">
+      <input type="number" inputMode="decimal" min={0} max={100} step={1} value={text} aria-label={label}
+        onChange={(e) => {
+          setText(e.target.value);
+          const v = Number(e.target.value.replace(",", "."));
+          if (Number.isFinite(v) && v >= 0 && v <= 100) onChange(v / 100);
+        }} />%
+    </span>
   );
 }
 

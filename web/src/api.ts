@@ -7,17 +7,19 @@ export interface SeriesInfo { id: string; name: string; currency: string; source
   first: string; last: string; days: number; last_value: number; note: string }
 
 export interface AssetSpec { id: string; label: string; rub: boolean; carry: string; carry_offset: number; go: number;
-  short_cap: number; vol_floor: number; cbr: boolean }
+  short_cap: number; vol_floor: number; cbr: boolean; weight: number }
 export interface ControlDef { name: string; kind: string; limit: number; floor: number; rolling: number; restart: number; start: number }
 export interface Preset { key: string; title: string; description: string; assets: Partial<AssetSpec>[];
-  params: { risk: number; lookbacks: number[] }; control?: number; history_from?: string; period?: string }
+  params: { risk: number; lookbacks: number[]; signal?: string }; control?: number; history_from?: string; period?: string;
+  start?: string }
 export interface Meta { presets: Preset[]; controls: ControlDef[]; windows: [string, string, string, string][];
   defaults: Params; carries: Record<string, string> }
 export interface Params { risk: number; lookbacks: number[]; slow: number; fast: number; cost: number; band: number;
   margin_cap: number; cbr_scale: number; signal?: string }
 
 export interface StudyRequest { assets: AssetSpec[]; params: Partial<Params>; control: number; period: string;
-  start?: string; history_from?: string; money_share: number; windows?: [string, string, string, string][]; bootstrap_paths?: number }
+  start?: string; history_from?: string; money_share: number; windows?: [string, string, string, string][]; bootstrap_paths?: number;
+  cov?: string }
 
 export interface Perf { cagr: number; mean: number; vol: number; sharpe: number; dd: number; dd_from: string; dd_to: string;
   calmar: number; worst_day: number; worst_day_date: string; worst_month: number; worst_month_date: string;
@@ -36,6 +38,7 @@ export interface TailNumbers { xi: N; beta: N; u: N; pu: N; n: number; mean: num
 
 export interface StudyResult {
   meta: { assets: AssetInfo[]; warnings: string[]; params: Params; control: ControlDef; ppy: number; labels: string[];
+    mode: "rule" | "portfolio"; bench: string;
     period: { from: string; to: string; years: number; mode: string; calendar_from: string }; elapsed: number };
   overview: { assets: AssetRow[]; curves: Thin; corr: { labels: string[]; full: N[][]; last_year: N[][] } };
   rule: { book: Perf; hold: Perf; vs_hold_t: number; equity: Thin;
@@ -61,7 +64,7 @@ export interface StudyResult {
   allocation: { error?: string; from: string; to: string; window_weeks: number; hold_weeks: number; labels: string[];
     rows: { key: string; title: string; cagr: number; vol: number; sharpe: number; dd: number; worst_week: number;
       cvar95: number; turnover: N; now: number[] | null }[];
-    equity: Thin; history: Record<string, { date: string; w: number[] }[]> };
+    equity: Thin; history: Record<string, { date: string; w: number[] }[]>; cov: string; shrinkage: N };
   sizing: { kelly: { mu: number; vol: number; sharpe: number; years: number; f_star: number; c_now: number; growth_now: N;
       kelly_vol: number; c_star: number; curve: number[][]; g_star: number };
     significance: { sharpe: number; years: number; se: number; low: number; high: number; t: number;
@@ -69,6 +72,26 @@ export interface StudyResult {
     vs_hold: { rho: number; sr_a: number; sr_b: number; diff: number; se: number; t: number; years_needed: N };
     vs_base: { rho: number; sr_a: number; sr_b: number; diff: number; se: number; t: number; years_needed: N } | null };
 }
+
+// ---------------------------------------------------------------------------- the factor lab (/api/factors)
+
+export interface FactorRow { key: string; title: string; data: "price" | "dividends" | "reports"; desc: string;
+  months: number; from: string; to: string; names: number; ic: number; ic_t: N; ic_hit: number; q: N[]; ew: number;
+  ls: number; ls_t: N; ex: number; ex_t: N; net: number; net_t: N; turnover: number; sig: boolean;
+  series: { dates: string[]; ends: string[]; ic: N[]; cum: number[][] } }
+export interface FactorLab {
+  meta: { from: string; to: string; months: number; top: number; cost: number; start: string; panel_from: string;
+    panel_to: string; tickers: number; sas: boolean; warnings: string[]; lost_share: number };
+  universe: { dates: string[]; ends: string[]; count: number[]; median_value: number[]; ew: number[]; mcftr: number[]; ew_year: number;
+    mcftr_year: number };
+  factors: FactorRow[];
+  fm: { key: string; title: string; from: string; to: string; months: number; r2: number;
+    rows: { key: string; title: string; coef: number; t: N }[] }[];
+  corr: { keys: string[]; titles: string[]; values: N[][] };
+  testing: { k: number; bonferroni: number; hlz: number; noise_max: number };
+  elapsed: number;
+}
+export interface FactorRequest { start: string; top: number; cost: number }
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
@@ -88,5 +111,7 @@ export const api = {
   search: (q: string, signal?: AbortSignal) => call<SearchHit[]>(`/api/search?q=${encodeURIComponent(q)}`, { signal }),
   series: (id: string) => call<SeriesInfo>(`/api/series?id=${encodeURIComponent(id)}`),
   study: (req: StudyRequest) => call<StudyResult>("/api/study", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
+  factors: (req: FactorRequest) => call<FactorLab>("/api/factors", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
 };

@@ -2,22 +2,26 @@
 
 - Yahoo Finance (`yahoo:<symbol>`): shares, funds, futures, indices, currencies and crypto of the world; adjusted closes
   (dividends and splits) where Yahoo has them.
-- MOEX ISS (`moex:<market>:<secid>`, market = shares | index | currency | futures): closes of the main boards. ISS no longer
-  publishes dividends, so a share's return is the price return (a dividend yield goes into the carry, see assets.py).
+- MOEX ISS (`moex:<market>:<secid>`, market = shares | index | currency | futures): closes of the main boards. A share is
+  brought to today's share count by ISS's splits and, where server-analytic-system's data is at hand, gets its T-Invest
+  dividends (from 2019): the total return, as MCFTR counts it (before tax). ISS no longer publishes dividends itself.
 - The Bank of Russia (`cbr:<ISO code>` - the official rate in rubles, from 1998; `cbr:RUONIA` - from 2010).
 """
 from __future__ import annotations
 
+import bisect
 import math
 import re
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from urllib.parse import quote
 
 import numpy as np
 
+from . import sas
 from .net import NotFound, fetch, fetch_json
 from .store import Series, cached, cached_json
 
@@ -48,7 +52,8 @@ def load(asset_id: str, max_age_hours: float = 12) -> Series:
         if market == "cont" and secid:
             return cached(asset_id, lambda: moex_continuous(secid), max_age_hours)
         if market in MOEX_MARKETS and secid:
-            return cached(asset_id, lambda: moex(market, secid), max_age_hours)
+            s = cached(asset_id, lambda: moex(market, secid), max_age_hours)
+            return total_return(s, secid) if market == "shares" else s
     if source == "cbr" and rest:
         return cached(asset_id, lambda: cbr(rest.upper()), max_age_hours)
     raise NotFound(f"неизвестный код актива: {asset_id}")
@@ -158,11 +163,115 @@ def moex(market: str, secid: str) -> Series:
     except Exception:
         desc = {}
     name = desc.get("NAME") or desc.get("SHORTNAME") or secid
-    note = "ценовая доходность: ISS не публикует дивиденды" if market == "shares" else ""
+    note = ""
     if market == "index" and secid.upper().endswith("TR"):
         note = "индекс полной доходности"
     return Series(id=f"moex:{market}:{secid}", name=name, currency="RUB", dates=days,
                   values=np.array([best[d][1] for d in days]), source="Мосбиржа ISS", type=market, note=note)
+
+
+def moex_splits() -> dict[str, list[tuple[str, float]]]:
+    """ISS splits and consolidations: secid -> [(the first day at the new price, shares after per share before)]."""
+    def get() -> list:
+        j = fetch_json(f"{ISS}/statistics/engines/stock/splits.json?iss.meta=off", timeout=30)
+        ix = {c: i for i, c in enumerate(j["splits"]["columns"])}
+        return [[r[ix["tradedate"]], r[ix["secid"]], r[ix["before"]], r[ix["after"]]] for r in j["splits"]["data"]]
+    out: dict[str, list[tuple[str, float]]] = {}
+    for day, secid, before, after in cached_json("moex-splits", get, 24 * 7):
+        if before and after:
+            out.setdefault(str(secid).upper(), []).append((str(day)[:10], float(after) / float(before)))
+    return out
+
+
+def shares_today(splits: list[tuple[str, float]], days) -> np.ndarray:
+    """How many of today's shares one share of each day became (1 after the last split)."""
+    days = np.asarray(days)
+    k = np.ones(len(days))
+    for first, ratio in splits:
+        k[days < first] *= ratio
+    return k
+
+
+SPLIT_RATIOS = (2, 3, 4, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000)
+
+
+def unlisted_splits(days: list[str], px: np.ndarray, jump: float = 4.0, near: float = 0.25) -> tuple[np.ndarray, list]:
+    """ISS lists the splits from 2018 only (Inter RAO's 2015 consolidation is missing): a day's price more than `jump`
+    times up or down and within `near` of a round ratio is taken for a split, the earlier prices brought to it."""
+    px = np.array(px, float)
+    found = []
+    for i in range(1, len(px)):
+        r = px[i] / px[i - 1]
+        if not (r > jump or r < 1 / jump):
+            continue
+        big = r if r > 1 else 1 / r
+        c = min(SPLIT_RATIOS, key=lambda x: abs(math.log(big / x)))
+        if abs(big / c - 1) < near:
+            ratio = c if r > 1 else 1 / c
+            px[:i] *= ratio
+            found.append((days[i], ratio))
+    return px, found
+
+
+def _ratio_text(c: float) -> str:
+    return f"{c:g}" if c >= 1 else f"1/{1 / c:g}"
+
+
+def ex_days(divs: list, days: list[str]) -> dict[int, list]:
+    """Index of the day each dividend leaves the price: the first trading day after the last day to buy with the
+    right (without that day - from the record date). A payment still ahead of the data is left out."""
+    out: dict[int, list] = {}
+    for d in divs:
+        i = bisect.bisect_right(days, d.last_buy) if d.last_buy else bisect.bisect_left(days, d.record)
+        if 0 < i < len(days):
+            out.setdefault(i, []).append(d)
+    return out
+
+
+def dividend_rubles(d, day: str) -> float:
+    if d.currency in ("rub", "rur", ""):
+        return d.amount
+    try:
+        fx = load(f"cbr:{d.currency.upper()}")
+    except Exception:
+        return math.nan
+    i = bisect.bisect_right(fx.dates, day) - 1
+    return d.amount * float(fx.values[i]) if i >= 0 else math.nan
+
+
+def total_return(s: Series, secid: str) -> Series:
+    """A share on today's share count with its dividends reinvested, the last value today's price (the earlier values
+    are scaled down by each dividend, as an adjusted close)."""
+    k = shares_today(moex_splits().get(secid.upper(), []), s.dates)
+    px, found = unlisted_splits(s.dates, s.values / k)
+    notes = []
+    if (k != 1).any():
+        notes.append("цены приведены к сегодняшнему числу акций (сплиты ISS)")
+    if found:
+        notes.append("сплиты не из списка ISS (скачок цены в круглое число раз за день): "
+                     + ", ".join(f"{d} ×{_ratio_text(c)}" for d, c in found))
+    all_divs = sas.dividends()
+    if all_divs is None:
+        notes.append("ценовая доходность: дивидендов нет (нужны данные server-analytic-system)")
+        return replace(s, values=px, note="; ".join(notes))
+    divs = ex_days(all_divs.get(secid.upper(), []), s.dates)
+    factor = np.ones(len(px))
+    used = 0
+    for i, ds in divs.items():
+        cash = sum(dividend_rubles(d, s.dates[i]) for d in ds)
+        if math.isfinite(cash) and cash > 0 and px[i - 1] > 0:
+            factor[i] = (px[i] + cash) / px[i]
+            used += len(ds)
+    # V_i / V_{i-1} = (px_i + D_i) / px_{i-1}: V = px * cumprod((px + D) / px)
+    index = px * np.cumprod(factor)
+    index *= px[-1] / index[-1]
+    if used:
+        notes.append(f"полная доходность: {used} выплат дивидендов T-Invest, до налога")
+    else:
+        notes.append("дивидендов в данных T-Invest нет: ценовая доходность")
+    if s.dates[0] < sas.DIVIDENDS_FROM:
+        notes.append(f"до {sas.DIVIDENDS_FROM[:4]} года дивиденды неизвестны: там ценовая доходность")
+    return replace(s, values=index, note="; ".join(notes))
 
 
 FORTS_NAMES = {

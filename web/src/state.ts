@@ -3,6 +3,7 @@ import type { AssetSpec, Meta, Preset, SeriesInfo, StudyRequest } from "./api";
 export interface UIAsset extends AssetSpec { slot: number; info?: SeriesInfo }
 
 export interface Settings {
+  signal: "trend" | "weights";
   risk: number;
   lookbacks: number[];
   fast: number;
@@ -14,15 +15,16 @@ export interface Settings {
   history_from: string;
   money_share: number;
   windows: [string, string, string, string][];
+  cov: "shrunk" | "sample";
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  risk: 0.10, lookbacks: [20], fast: 20, cost: 0.0006, margin_cap: 0.5, control: 0, period: "common", start: "",
+  signal: "trend", cov: "shrunk", risk: 0.10, lookbacks: [20], fast: 20, cost: 0.0006, margin_cap: 0.5, control: 0, period: "common", start: "",
   history_from: "", money_share: 0.5, windows: [],
 };
 
 export const ASSET_DEFAULTS: Omit<AssetSpec, "id" | "label"> = {
-  rub: false, carry: "auto", carry_offset: 0, go: 0.1, short_cap: 1, vol_floor: 0, cbr: false,
+  rub: false, carry: "auto", carry_offset: 0, go: 0.1, short_cap: 1, vol_floor: 0, cbr: false, weight: 0,
 };
 
 export function freeSlot(assets: UIAsset[]): number {
@@ -39,16 +41,17 @@ export function fromPreset(p: Preset): { assets: UIAsset[]; settings: Settings }
   return {
     assets,
     settings: { ...DEFAULT_SETTINGS, risk: p.params.risk, lookbacks: p.params.lookbacks, control: p.control ?? 0,
-      history_from: p.history_from ?? "", period: (p.period as Settings["period"]) ?? "common" },
+      history_from: p.history_from ?? "", period: (p.period as Settings["period"]) ?? "common", start: p.start ?? "",
+      signal: p.params.signal === "weights" ? "weights" : "trend" },
   };
 }
 
 export function request(assets: UIAsset[], s: Settings): StudyRequest {
   return {
     assets: assets.map(({ slot: _slot, info: _info, ...spec }) => spec),
-    params: { risk: s.risk, lookbacks: s.lookbacks, fast: s.fast, cost: s.cost, margin_cap: s.margin_cap },
+    params: { risk: s.risk, lookbacks: s.lookbacks, fast: s.fast, cost: s.cost, margin_cap: s.margin_cap, signal: s.signal },
     control: s.control, period: s.period, start: s.start || undefined, history_from: s.history_from || undefined,
-    money_share: s.money_share, windows: s.windows.length ? s.windows : undefined,
+    money_share: s.money_share, windows: s.windows.length ? s.windows : undefined, cov: s.cov,
   };
 }
 
@@ -60,7 +63,7 @@ export function loadSaved(): { assets: UIAsset[]; settings: Settings } | null {
     if (!raw) return null;
     const v = JSON.parse(raw);
     if (!Array.isArray(v.assets)) return null;
-    return { assets: v.assets, settings: { ...DEFAULT_SETTINGS, ...v.settings } };
+    return { assets: v.assets.map((a: UIAsset) => ({ ...ASSET_DEFAULTS, ...a })), settings: { ...DEFAULT_SETTINGS, ...v.settings } };
   } catch {
     return null;
   }

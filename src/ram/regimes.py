@@ -71,8 +71,9 @@ def regimes(days: list[str], W: np.ndarray, book_weekly: np.ndarray, labels: lis
     vol = np.nanstd(W, axis=0)
     vol = np.where(vol > 0, vol, np.nan)
     scaled = W / vol[None, :]
-    with np.errstate(invalid="ignore"):
-        mkt = np.nanmean(scaled, axis=1)
+    has = np.isfinite(scaled).any(axis=1)  # a week before any asset trades has no basket return
+    mkt = np.full(len(W), np.nan)
+    mkt[has] = np.nanmean(scaled[has], axis=1)
     keep = np.isfinite(mkt)
     if keep.sum() < 150:
         return {"error": "для режимов нужно хотя бы 150 недель общей истории"}

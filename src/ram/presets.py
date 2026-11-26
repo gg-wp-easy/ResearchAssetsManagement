@@ -14,6 +14,28 @@ def _usd(ids: list[tuple[str, str]], **extra) -> list[dict]:
     return [{"id": i, "label": label, **extra} for i, label in ids]
 
 
+# server-analytic-system's portfolios on the snapshot of 2025-10-31 (P/E, the hybrid of regression, clusters, tree and
+# network; Ledoit-Wolf covariance, Gordon returns, weights 1-10%): data/stock_snapshot_2025-10-31/pe/portfolios.csv.
+SAS_MAX_SHARPE = [("BANEP", "Башнефть ап", 0.1), ("SFIN", "ЭсЭфАй", 0.1), ("MOEX", "Мосбиржа", 0.1),
+                  ("BSPB", "Банк СПб", 0.1), ("SBERP", "Сбербанк ап", 0.1), ("IRAO", "Интер РАО", 0.1),
+                  ("MRKP", "Россети ЦиП", 0.1), ("LEAS", "Европлан", 0.0686), ("LSRG", "ЛСР", 0.0641),
+                  ("LKOH", "Лукойл", 0.0473), ("NKHP", "НКХП", 0.03), ("WUSH", "Whoosh", 0.01),
+                  ("TTLK", "Таттелеком", 0.01), ("MRKC", "Россети Центр", 0.01), ("MRKU", "Россети Урал", 0.01),
+                  ("EUTR", "ЕвроТранс", 0.01), ("AQUA", "Инарктика", 0.01), ("TRNFP", "Транснефть ап", 0.01),
+                  ("SVAV", "Соллерс", 0.01), ("NKNCP", "Нижнекамскнефтехим ап", 0.01)]
+SAS_MIN_RISK = [("NKNCP", "Нижнекамскнефтехим ап", 0.1), ("SBERP", "Сбербанк ап", 0.1), ("KAZT", "КуйбышевАзот", 0.1),
+                ("IRAO", "Интер РАО", 0.1), ("LSNGP", "Ленэнерго ап", 0.1), ("MOEX", "Мосбиржа", 0.1),
+                ("LKOH", "Лукойл", 0.1), ("MRKP", "Россети ЦиП", 0.0786), ("TRNFP", "Транснефть ап", 0.0724),
+                ("BSPB", "Банк СПб", 0.0322), ("AQUA", "Инарктика", 0.0267), ("SFIN", "ЭсЭфАй", 0.01),
+                ("LSRG", "ЛСР", 0.01), ("SVAV", "Соллерс", 0.01), ("MRKU", "Россети Урал", 0.01),
+                ("BANEP", "Башнефть ап", 0.01), ("EUTR", "ЕвроТранс", 0.01), ("WUSH", "Whoosh", 0.01),
+                ("TTLK", "Таттелеком", 0.01), ("MRKC", "Россети Центр", 0.01)]
+
+
+def _sas(rows: list[tuple[str, str, float]]) -> list[dict]:
+    return [{"id": f"moex:shares:{t}", "label": label, "weight": w, "go": 0.2} for t, label, w in rows]
+
+
 PRESETS = [
     {
         "key": "main",
@@ -106,13 +128,35 @@ PRESETS = [
     {
         "key": "moex_shares",
         "title": "Акции Мосбиржи",
-        "description": "Крупнейшие акции ISS (ценовая доходность: ISS не отдаёт дивиденды; поправка ставки −8% "
-                       "приближённо учитывает их).",
-        "assets": [{"id": f"moex:shares:{t}", "label": label, "carry": "rub", "carry_offset": -0.08, "go": 0.20}
+        "description": "Крупнейшие акции ISS с дивидендами T-Invest (данные server-analytic-system, с 2019 года; "
+                       "раньше — ценовая доходность), статистика с 2019 года.",
+        "assets": [{"id": f"moex:shares:{t}", "label": label, "carry": "rub", "go": 0.20}
                    for t, label in (("SBER", "Сбербанк"), ("GAZP", "Газпром"), ("LKOH", "Лукойл"),
                                     ("GMKN", "Норникель"), ("NVTK", "Новатэк"), ("ROSN", "Роснефть"),
                                     ("TATN", "Татнефть"), ("MGNT", "Магнит"), ("PLZL", "Полюс"), ("MTSS", "МТС"))],
         "params": {"risk": 0.10, "lookbacks": [20]},
+        "start": "2019-01-01",
+    },
+    {
+        "key": "sas_max_sharpe",
+        "title": "Портфель SAS: максимум Шарпа",
+        "description": "20 акций server-analytic-system на срезе 31.10.2025 (оценка по P/E, гибрид моделей) с его весами: "
+                       "как этот состав пережил бы кризисы. До появления бумаги её вес делится между остальными; "
+                       "доходность — сверх RUONIA, с дивидендами с 2019 года.",
+        "assets": _sas(SAS_MAX_SHARPE),
+        "params": {"risk": 0.10, "lookbacks": [20], "signal": "weights"},
+        "period": "full",
+        "history_from": "2008-01-01",
+    },
+    {
+        "key": "sas_min_risk",
+        "title": "Портфель SAS: минимум риска",
+        "description": "Портфель минимального риска того же среза SAS (31.10.2025, P/E, гибрид): в проверке SAS на "
+                       "следующем году такие портфели обогнали MCFTR все пять.",
+        "assets": _sas(SAS_MIN_RISK),
+        "params": {"risk": 0.10, "lookbacks": [20], "signal": "weights"},
+        "period": "full",
+        "history_from": "2008-01-01",
     },
     {
         "key": "ruble",

@@ -10,7 +10,8 @@ import numpy as np
 from . import allocation, bootstrap, regimes, scenarios, sizing, tails
 from .assets import AssetSpec, Basket, build, weekly
 from .metrics import drawdown, equity, perf, period_returns, thin, weekly_t
-from .rule import CONTROLS, Control, Params, Signal, full_size_today, independent, multipliers, signal, simulate, weights_today
+from .rule import (CONTROLS, Control, Params, Signal, full_size_today, independent, multipliers, portfolio_weights, signal,
+                   simulate, weights_today)
 
 LOOKBACK_GRID: list[tuple[str, tuple[int, ...]]] = [("10", (10,)), ("20", (20,)), ("40", (40,)), ("60", (60,)),
                                                     ("120", (120,)), ("250", (250,)), ("20+40+60", (20, 40, 60))]
@@ -27,8 +28,21 @@ def parse(req: dict) -> tuple[list[AssetSpec], Params, Control, dict]:
     control = CONTROLS[int(c)] if isinstance(c, (int, float)) else Control.from_dict(c)
     opts = {"start": req.get("start"), "end": req.get("end"), "period": req.get("period", "common"),
             "history_from": req.get("history_from"), "money_share": float(req.get("money_share", 0.5)),
-            "windows": req.get("windows", []), "bootstrap_paths": int(req.get("bootstrap_paths", 4000))}
+            "windows": req.get("windows", []), "bootstrap_paths": int(req.get("bootstrap_paths", 4000)),
+            "cov": req.get("cov", "shrunk")}
+    if opts["cov"] not in allocation.COVS:
+        raise ValueError(f"ковариация {opts['cov']!r}: одна из {', '.join(allocation.COVS)}")
+    if params.signal == "weights" and not sum(s.weight for s in specs) > 0:
+        raise ValueError("у портфеля нет весов: задайте вес хотя бы одному активу")
     return specs, params, control, opts
+
+
+def today_book(b: Basket, p: Params) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(full position, daily sigma, strength) at the end of the data; a portfolio: (its weights, sigma, 1)."""
+    full, s = full_size_today(b, p)
+    if p.portfolio:
+        return portfolio_weights(b, p)[-1], s, np.ones(b.n)
+    return full, s, weights_today(b, p, s)
 
 
 def first_ok(sig: Signal) -> np.ndarray:
@@ -60,7 +74,7 @@ def run_study(req: dict) -> dict:
     ppy = b.ppy
     run = simulate(b, p, control, sig)
     base = run if control.kind == "none" else simulate(b, p, CONTROLS[0], sig)
-    p_hold = replace(p, signal="hold")
+    p_hold = replace(p, signal="equal" if p.portfolio else "hold")
     sig_hold = signal(b, p_hold)
     hold = simulate(b, p_hold, CONTROLS[0], sig_hold)
     x, xh = run.x[s0:], hold.x[s0:]
@@ -71,7 +85,8 @@ def run_study(req: dict) -> dict:
         "meta": {"assets": b.info, "warnings": b.warnings, "params": p.as_dict(), "control": control.__dict__,
                  "period": {"from": days[0], "to": days[-1], "years": len(days) / ppy, "mode": opts["period"],
                             "calendar_from": b.dates[0]},
-                 "ppy": ppy, "labels": b.labels},
+                 "ppy": ppy, "labels": b.labels, "mode": "portfolio" if p.portfolio else "rule",
+                 "bench": "поровну" if p.portfolio else "держать"},
         "overview": overview(b, p, sig, s0, W[wk0:]),
         "rule": rule_section(b, p, run, hold, sig, s0),
         "crises": scenarios.crisis_table(b, run.x, run.pos, s0, scenarios.WINDOWS + [tuple(w) for w in opts["windows"]]),
@@ -79,7 +94,8 @@ def run_study(req: dict) -> dict:
         "tails": tail_section(b, x, s0),
         "drawdown": drawdown_section(b, p, sig, s0, base, control, opts["bootstrap_paths"]),
         "regimes": regimes.regimes(wdays[wk0:], W[wk0:], book_w[wk0:], b.labels),
-        "allocation": allocation_section(wdays, W, wk0, book_w, _weekly_of(b.dates, hold.x, wdays), b.labels),
+        "allocation": allocation_section(wdays, W, wk0, book_w, _weekly_of(b.dates, hold.x, wdays), b.labels, p, opts["cov"],
+                                         np.array([sp.weight for sp in b.specs]) if p.signal == "weights" else None),
         "sizing": {"kelly": sizing.kelly(x, ppy), "significance": sizing.significance(x, ppy),
                    "vs_hold": sizing.compare(x, xh, ppy),
                    "vs_base": sizing.compare(x, base.x[s0:], ppy) if base is not run else None},
@@ -99,8 +115,7 @@ def _weekly_of(dates: list[str], x: np.ndarray, wdays: list[str]) -> np.ndarray:
 
 
 def overview(b: Basket, p: Params, sig: Signal, s0: int, W: np.ndarray) -> dict:
-    full, s = full_size_today(b, p)
-    w_now = weights_today(b, p, s)
+    full, s, w_now = today_book(b, p)
     rows = []
     for j in range(b.n):
         r = b.R[s0:, j]
@@ -196,9 +211,8 @@ def lookback_heat(b: Basket, p: Params, s0: int) -> dict:
 
 
 def scenario_section(b: Basket, p: Params, opts: dict) -> dict:
-    full, s = full_size_today(b, p)
-    w = weights_today(b, p, s)
-    risks = sorted({0.05, 0.075, 0.10, 0.20, 0.50, round(p.risk, 4)})
+    full, s, w = today_book(b, p)
+    risks = [p.risk] if p.portfolio else sorted({0.05, 0.075, 0.10, 0.20, 0.50, round(p.risk, 4)})
     return {
         "date": b.dates[-1],
         "risk": p.risk, "risks": risks,
@@ -259,28 +273,29 @@ def drawdown_section(b: Basket, p: Params, sig: Signal, s0: int, base, chosen: C
 
 
 def allocation_section(wdays: list[str], W: np.ndarray, wk0: int, book_w: np.ndarray, hold_w: np.ndarray,
-                       labels: list[str]) -> dict:
+                       labels: list[str], p: Params, cov: str = "shrunk", given: np.ndarray | None = None) -> dict:
     if W.shape[1] < 2:
         return {"error": "распределение капитала имеет смысл для двух и более активов"}
-    wf = allocation.walk_forward(wdays, W)
+    wf = allocation.walk_forward(wdays, W, cov=cov, given=given)
     if "error" in wf:
         return wf
     start = max(wk0, wdays.index(wf["first"]))
     days = wdays[start:]
     rows, curves = [], []
-    for m, title in allocation.METHODS:
+    for m, title in wf["methods"]:
         r = wf["returns"][m][start:]
         rows.append({"key": m, "title": title, **allocation.summary(days, r), "turnover": wf["turnover"][m],
                      "now": wf["history"][m][-1]["w"] if wf["history"][m] else None})
         curves.append(np.cumprod(1 + np.nan_to_num(r)))
-    for key, title, r in (("book", "правило тренда (книга)", book_w[start:]),
-                          ("hold", "держать с размером по волатильности", hold_w[start:])):
+    books = [("book", "портфель: веса каждый день, контроль просадки счёта", book_w[start:])] if p.portfolio else \
+        [("book", "правило тренда (книга)", book_w[start:]), ("hold", "держать с размером по волатильности", hold_w[start:])]
+    for key, title, r in books:
         rows.append({"key": key, "title": title, **allocation.summary(days, r), "turnover": None, "now": None})
         curves.append(np.cumprod(1 + r))
     every = max(1, len(days) // 600)
-    hist = {m: wf["history"][m] for m in ("erc", "min_cvar", "max_sharpe")}
+    hist = {m: wf["history"][m] for m in ("erc", "hrp", "min_cvar", "max_sharpe")}
     return {"from": days[0], "to": days[-1], "window_weeks": 156, "hold_weeks": 13, "rows": rows, "labels": labels,
-            "equity": thin(days, *curves, every=every), "history": hist}
+            "equity": thin(days, *curves, every=every), "history": hist, "cov": wf["cov"], "shrinkage": wf["shrinkage"]}
 
 
 def clean(o):

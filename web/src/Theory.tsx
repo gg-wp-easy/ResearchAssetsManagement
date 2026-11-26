@@ -7,7 +7,8 @@ function Tex({ children, block = false }: { children: string; block?: boolean })
   return block ? <div className="tex-block" dangerouslySetInnerHTML={{ __html: html }} /> : <span dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-interface Sec { id: string; title: string; lead: ReactNode; formulas: string[]; where: [string, ReactNode][]; book?: ReactNode; site: string }
+interface Sec { id: string; title: string; lead: ReactNode; formulas: string[]; where: [string, ReactNode][]; book?: ReactNode; site: string;
+  bookLabel?: string }
 
 const SECTIONS: Sec[] = [
   {
@@ -95,6 +96,35 @@ const SECTIONS: Sec[] = [
     where: [["ρ", "корреляция доходностей двух стратегий"], ["K", "сколько вариантов перебрали; γ — постоянная Эйлера (Bailey, López de Prado, 2014)"]],
     book: <>«Основной с защитой» против основного: ρ = 0,93, ΔSR = 0,17 — для t = 2 нужно 19 лет. Бумага проверит механику, решение о защите опирается на хвосты и просадки.</>,
   },
+  {
+    id: "s11", title: "Полная доходность акции", site: "любая акция Мосбиржи, Факторы акций",
+    lead: <>ISS отдаёт цены как были: в день сплита GMKN «падает» на 99%. Цены приводятся к сегодняшнему числу акций, а дивиденды T-Invest (тоже на сегодняшнее число акций) возвращаются в доходность в день, когда цена их теряет.</>,
+    formulas: [String.raw`\tilde P_t = \frac{P_t}{k_t}, \qquad k_t = \prod_{s > t} \frac{\text{после}_s}{\text{до}_s}`,
+      String.raw`1 + r_t = \frac{\tilde P_t + D_t}{\tilde P_{t-1}}, \qquad V_t = \tilde P_t \prod_{u \le t}\Big(1 + \frac{D_u}{\tilde P_u}\Big)`],
+    where: [["k_t", "сколько сегодняшних акций стала одна акция дня t: сплиты ISS, а до 2018 года — скачки цены в круглое число раз (консолидация Интер РАО 2015)"],
+      ["D_t", "дивиденды, отсечка которых пришлась на день t (первый торговый день после последнего дня покупки с правом), до налога — как в MCFTR"],
+      ["V_t", "индекс полной доходности; последний его день равен сегодняшней цене"]],
+    bookLabel: "Данные", book: <>Дивиденды — из server-analytic-system (T-Invest, с 2019 года, около 1 190 выплат по 173 акциям). Раньше 2019 года дивидендов в данных нет: там доходность ценовая.</>,
+  },
+  {
+    id: "s12", title: "Сжатие ковариации и иерархический паритет риска", site: "Распределение",
+    lead: <>Из 156 недель нельзя точно оценить корреляции 20 бумаг: оптимизатор, обращающий такую матрицу, ставит на шум. Два ответа: сжать корреляции к общему среднему или не обращать матрицу вовсе.</>,
+    formulas: [String.raw`\hat\Sigma = \delta F + (1-\delta) S, \qquad F_{ij} = \bar\rho\, s_i s_j,\; F_{ii} = s_i^2, \qquad \delta^* = \max\!\Big(0, \min\!\Big(1, \frac{\hat\pi - \hat\varrho}{\hat\gamma\, T}\Big)\Big)`,
+      String.raw`d_{ij} = \sqrt{\tfrac12 (1 - \rho_{ij})}, \qquad \alpha = 1 - \frac{V_1}{V_1 + V_2}, \qquad V = \tilde w^\top \Sigma\, \tilde w,\; \tilde w \propto \operatorname{diag}(\Sigma)^{-1}`],
+    where: [["S, ρ̄", "выборочная ковариация и средняя корреляция"], ["π̂, ϱ̂, γ̂", "оценки ошибки выборочной матрицы, связи с целью и расстояния до цели (Ledoit, Wolf, 2004)"],
+      ["HRP", "бумаги упорядочены деревом одиночной связи по расстоянию d, вес делится между половинами обратно их дисперсии V (López de Prado, 2016)"]],
+  },
+  {
+    id: "s13", title: "Факторы: IC, квинтили, Фама–Макбет", site: "Факторы акций",
+    lead: <>Вопрос факторного анализа — не «вырастет ли бумага», а «упорядочивает ли признак бумаги по будущей доходности». Мера — ранговая корреляция в каждом месяце; премия при прочих равных — регрессия Фамы–Макбета.</>,
+    formulas: [String.raw`\mathrm{IC}_m = \operatorname{corr}\big(\operatorname{rank} f_{i,m},\; \operatorname{rank} r_{i,m+1}\big), \qquad t = \frac{\overline{\mathrm{IC}}}{s_{\mathrm{IC}}}\sqrt{M}`,
+      String.raw`r_{i,m+1} = a_m + \sum_j b_{j,m}\, z_{ij,m} + \varepsilon_{i,m}, \qquad \hat b_j = \frac1M \sum_m b_{j,m}, \qquad t_j = \frac{\hat b_j}{s_{b_j}}\sqrt{M}`,
+      String.raw`t^{*}_{K} = \Phi^{-1}\Big(1 - \frac{0{,}025}{K}\Big), \qquad \operatorname{med}\max_{k\le K} |t_k| = \Phi^{-1}\Big(\frac{1 + 2^{-1/K}}{2}\Big)`],
+    where: [["f, z", "значение фактора на конец месяца и его ранг, приведённый к единичной дисперсии"], ["M", "месяцев"],
+      ["K", "сколько факторов проверено: при 13 факторах порог Бонферрони 2,89, а лучший из 13 чистых шумов в среднем даёт |t| ≈ 1,9"],
+      ["Q5 − Q1", "верхняя пятая часть бумаг по фактору минус нижняя; Q5 − все — то, что доступно без шортов"]],
+    bookLabel: "На акциях Мосбиржи, 2015–2026", book: <>100 самых ликвидных бумаг, издержки 0,2% за сторону: моментум 12−1 (t = 3,8) и низкая волатильность (t = 4,1) проходят порог на 142 месяцах; доходность последнего месяца продолжается, а не разворачивается (t = −3,2), но оборот 77% в месяц съедает её. FCF/P и E/P проходят порог на 55–57 месяцах 2022–2026 годов — коротко и только на выживших бумагах.</>,
+  },
 ];
 
 const READING: [string, string][] = [
@@ -104,9 +134,10 @@ const READING: [string, string][] = [
   ["McNeil, Frey, Embrechts, «Quantitative Risk Management»", "EVT, копулы, ES — к §3–§5"],
   ["Hamilton, «Time Series Analysis»", "смена режимов (§7)"],
   ["MacLean, Thorp, Ziemba, «The Kelly Capital Growth Investment Criterion»", "§8 и дробный Келли"],
-  ["López de Prado, «Advances in Financial Machine Learning»", "переобучение бэктестов, дефлированный Шарп (§10)"],
+  ["López de Prado, «Advances in Financial Machine Learning»", "переобучение бэктестов, дефлированный Шарп (§10), HRP (§12)"],
+  ["Grinold, Kahn, «Active Portfolio Management»", "IC, фундаментальный закон активного управления — к §13"],
   ["Taleb, «Statistical Consequences of Fat Tails»", "что ломается в статистике при ξ > 0"],
-  ["Статьи", "Grossman, Zhou (1993); Rockafellar, Uryasev (2000); Brunnermeier, Nagel, Pedersen (2008); Lo (2002); Welch, Goyal (2008)"],
+  ["Статьи", "Grossman, Zhou (1993); Rockafellar, Uryasev (2000); Brunnermeier, Nagel, Pedersen (2008); Lo (2002); Welch, Goyal (2008); Fama, MacBeth (1973); Ledoit, Wolf (2004); Harvey, Liu, Zhu (2016)"],
 ];
 
 export function Theory() {
@@ -131,7 +162,7 @@ export function Theory() {
                 {s.formulas.map((f) => <Tex key={f} block>{f}</Tex>)}
                 <dl className="where">{s.where.map(([k, v]) => [<dt key={k + "t"}>{k}</dt>, <dd key={k + "d"}>{v}</dd>])}</dl>
               </div>
-              {s.book && <div className="book"><div className="label">В исследовании бота</div><p>{s.book}</p></div>}
+              {s.book && <div className="book"><div className="label">{s.bookLabel ?? "В исследовании бота"}</div><p>{s.book}</p></div>}
               <p className="site-link">На сайте: {s.site}.</p>
             </section>
           ))}

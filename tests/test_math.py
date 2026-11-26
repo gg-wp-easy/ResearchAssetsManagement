@@ -47,10 +47,11 @@ def test_kelly_and_sharpe():
 def test_risk_parity_equalizes_contributions():
     rng = np.random.default_rng(3)
     X = rng.normal(0, 1, (300, 3)) * np.array([0.01, 0.02, 0.04])
-    w = allocation.weights("erc", X)
-    cov = np.cov(X, rowvar=False)
-    rc = w * (cov @ w)
-    assert np.allclose(rc, rc.mean(), rtol=1e-4)
+    for kind in allocation.COVS:
+        w = allocation.weights("erc", X, kind)
+        cov = allocation.covariance(X, kind)
+        rc = w * (cov @ w)
+        assert np.allclose(rc, rc.mean(), rtol=1e-4)
     for m, _ in allocation.METHODS:
         w = allocation.weights(m, X)
         assert w.sum() == pytest.approx(1) and (w >= -1e-12).all()

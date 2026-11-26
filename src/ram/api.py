@@ -12,12 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, sources
+from . import __version__, factors, sas, sources
 from .net import NotFound
 from .presets import PRESETS
 from .rule import CONTROLS, Params
 from .scenarios import WINDOWS
-from .study import run_study
+from .study import clean, run_study
 
 app = FastAPI(title="Research Assets Management", version=__version__)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -25,6 +25,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
 
 _results: OrderedDict[str, dict] = OrderedDict()
 _lock = threading.Lock()
+_factor_lock = threading.Lock()  # one panel build at a time: the first one downloads ~700 weeks of ISS
 
 
 @app.get("/api/health")
@@ -72,11 +73,47 @@ def study(req: dict) -> dict:
         raise HTTPException(404, str(e)) from e
     except (ValueError, KeyError, TypeError) as e:
         raise HTTPException(400, str(e)) from e
+    return _remember(key, res)
+
+
+def _remember(key: str, res: dict) -> dict:
     with _lock:
         _results[key] = res
         while len(_results) > 16:
             _results.popitem(last=False)
     return res
+
+
+@app.post("/api/factors")
+def factor_lab(req: dict) -> dict:
+    from datetime import date
+    try:
+        start = date.fromisoformat(str(req.get("start") or "2015-01-01")[:10]).isoformat()
+        top, cost = int(req.get("top", 100)), float(req.get("cost", 0.002))
+    except (TypeError, ValueError) as e:
+        raise HTTPException(400, f"параметры лаборатории: {e}") from e
+    if not 20 <= top <= 1000 or not 0 <= cost <= 0.05:
+        raise HTTPException(400, "бумаг во вселенной — от 20 до 1000, издержки — от 0 до 5% за сторону")
+    key = "factors:" + json.dumps([start, top, cost])
+    with _lock:
+        if key in _results:
+            _results.move_to_end(key)
+            return _results[key]
+    with _factor_lock:
+        try:
+            res = clean(factors.lab(start, top, cost))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+    return _remember(key, res)
+
+
+@app.get("/api/sas")
+def sas_status() -> dict:
+    """Whether server-analytic-system's data is at hand (dividends, smart-lab reports)."""
+    root = sas.sas_dir()
+    divs, reps = sas.dividends(), sas.reports()
+    return {"dir": str(root) if root else None, "dividends": sum(len(v) for v in divs.values()) if divs else 0,
+            "dividend_tickers": len(divs or {}), "report_tickers": len(reps or {})}
 
 
 def _mount_frontend() -> None:

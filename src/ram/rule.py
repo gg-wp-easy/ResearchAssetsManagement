@@ -8,6 +8,10 @@ Each day i, after the close, for each asset:
 and the position moves to w when it is a quarter of the full size away or points the other way (the "band"). m is the
 drawdown control's multiplier. The positions earn day i+1's return; a change costs `cost` per unit of notional. The
 margin cap scales all positions down when sum |w| * GO exceeds the cap.
+
+signal = "weights" is a long portfolio instead of the rule: each asset holds its given weight (AssetSpec.weight; "equal"
+- 1/N), renormalized over the assets already trading, kept at that share of the capital every day; the drawdown control
+and the costs work as for the rule.
 """
 from __future__ import annotations
 
@@ -32,6 +36,9 @@ CBR_MEETINGS = frozenset({
 })
 
 
+SIGNALS = ("trend", "hold", "weights", "equal")
+
+
 @dataclass(frozen=True)
 class Params:
     risk: float = 0.10  # per asset: the annual volatility of a full position, share of the capital
@@ -42,7 +49,7 @@ class Params:
     band: float = 0.25  # the position moves when the target is this share of the full size away
     margin_cap: float = 0.5  # sum |w| * GO <= cap (0: no cap)
     cbr_scale: float = 0.5  # the size of the flagged assets the evening before a rate decision
-    signal: str = "trend"  # trend | hold (always long a full position: the volatility-targeted holder)
+    signal: str = "trend"  # trend | hold (always long a full position) | weights (given weights) | equal (1/N)
 
     @staticmethod
     def from_dict(d: dict) -> "Params":
@@ -50,11 +57,17 @@ class Params:
         if "lookbacks" in known:
             known["lookbacks"] = tuple(sorted({int(x) for x in known["lookbacks"]})) or (20,)
         p = Params(**known)
+        if p.signal not in SIGNALS:
+            raise ValueError(f"сигнал {p.signal!r}: один из {', '.join(SIGNALS)}")
         if not 0 < p.risk <= 2:
             raise ValueError("риск на актив - от 0 до 200%")
         if any(L < 2 or L > 500 for L in p.lookbacks):
             raise ValueError("окно тренда - от 2 до 500 дней")
         return p
+
+    @property
+    def portfolio(self) -> bool:
+        return self.signal in ("weights", "equal")
 
     def as_dict(self) -> dict:
         d = asdict(self)
@@ -157,9 +170,26 @@ class Signal:
     vol: np.ndarray  # T x N annual volatility the size is figured from
 
 
+def portfolio_weights(b: Basket, p: Params) -> np.ndarray:
+    """T x N: the given weights (or 1/N) over the assets alive each day, summing to 1."""
+    w = np.array([s.weight for s in b.specs]) if p.signal == "weights" else np.ones(b.n)
+    if not w.sum() > 0:
+        raise ValueError("у портфеля нет весов: задайте вес хотя бы одному активу")
+    on = b.alive * w[None, :]
+    total = on.sum(axis=1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(total > 0, on / total, 0.0)
+
+
 def signal(b: Basket, p: Params) -> Signal:
     R, E = b.R, b.E
     T, N = R.shape
+    if p.portfolio:
+        var = np.fmax(ewma_var(R, p.slow), ewma_var(R, p.fast)) if p.fast else ewma_var(R, p.slow)
+        target = portfolio_weights(b, p)
+        ok = b.alive & np.isfinite(E)
+        return Signal(ok=ok, size=target, strength=np.where(ok, 1.0, np.nan), target=np.where(ok, target, 0.0),
+                      scale=np.ones((T, N)), vol=np.sqrt(var * b.ppy))
     var = ewma_var(R, p.slow)
     if p.fast:
         var = np.fmax(var, ewma_var(R, p.fast))
@@ -244,7 +274,8 @@ def simulate(b: Basket, p: Params, control: Control = CONTROLS[0], sig: Signal |
             want = np.zeros(N)
         else:
             w = sig.target[i] * m
-            moved = (np.abs(w - pos) > p.band * sig.size[i]) | (np.sign(w) != np.sign(pos)) | (sig.scale[i] < 1)
+            band = 0.0 if p.portfolio else p.band  # a portfolio is kept at its weights
+            moved = (np.abs(w - pos) > band * sig.size[i]) | (np.sign(w) != np.sign(pos)) | (sig.scale[i] < 1)
             want = np.where(sig.ok[i] & moved, w, pos)
         want = np.where(alive, want, 0.0)  # the asset's history has ended: closed
         if cap > 0:
@@ -287,7 +318,9 @@ def full_size_today(b: Basket, p: Params) -> tuple[np.ndarray, np.ndarray]:
 
 
 def weights_today(b: Basket, p: Params, s: np.ndarray) -> np.ndarray:
-    """The rule's strength at the end of the data, short cap applied (hold: 1)."""
+    """The rule's strength at the end of the data, short cap applied (hold and portfolios: 1)."""
+    if p.portfolio:
+        return np.ones(b.n)
     out = []
     for j in range(b.n):
         col = b.E[:, j]
