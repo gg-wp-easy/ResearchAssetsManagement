@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 
@@ -166,6 +166,10 @@ const READING: [string, string][] = [
 ];
 
 export function Theory() {
+  useEffect(() => {  // #/theory/s13: open at the paragraph (links from the help page)
+    const id = window.location.hash.replace(/^#\/?/, "").split("?")[0].split("/")[1];
+    if (id) window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ block: "start" }), 50);
+  }, []);
   return (
     <div className="doc">
       <header className="doc-head">

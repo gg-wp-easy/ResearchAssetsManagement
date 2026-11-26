@@ -4,6 +4,7 @@ import { axis, base, Chart, heat, legend, timeLines, type Option } from "./chart
 import { day, num, pct } from "./format";
 import { useTheme } from "./theme";
 import { Card, Note, TableWrap, V } from "./ui";
+import { Guide, Term } from "./help";
 
 export const LAB_KEY = "ram.factors.v1";
 const KEY = LAB_KEY;
@@ -57,6 +58,7 @@ export function Factors() {
         <h1>Факторы акций Мосбиржи</h1>
         <p>Говорит ли признак акции, известный в конце месяца, какие бумаги обгонят остальные в следующем месяце? Каждый месяц — самые ликвидные акции основного режима на ту дату (вместе с теми, что позже ушли с биржи), доходность с дивидендами, отчётность — только опубликованная до даты.</p>
       </header>
+      <Guide id="factors" />
 
       <Card>
         <div className="lab-controls">
@@ -118,12 +120,12 @@ function LabResult({ r, sel, onSel, stale }: { r: FactorLab; sel: string; onSel:
           <table className="compact">
             <thead><tr>
               <th>Фактор</th><th className="r" title="месяцев с данными">Мес.</th><th className="r" title="бумаг в среднем за месяц">Бумаг</th>
-              <th className="r" title="средняя ранговая корреляция фактора с доходностью следующего месяца">IC</th><th className="r">t(IC)</th>
-              <th className="r" title="доля месяцев с IC > 0">IC &gt; 0</th><th className="pl">Квинтили</th>
+              <th className="r"><Term k="ic">IC</Term></th><th className="r"><Term k="t">t(IC)</Term></th>
+              <th className="r" title="доля месяцев с IC > 0">IC &gt; 0</th><th className="pl"><Term k="quintile">Квинтили</Term></th>
               <th className="r" title="верхний квинтиль минус нижний, в год">Q5 − Q1</th><th className="r">t</th>
               <th className="r" title="верхний квинтиль минус все бумаги поровну, в год">Q5 − все</th>
-              <th className="r" title="то же за вычетом издержек оборота верхнего квинтиля">нетто</th>
-              <th className="r" title="доля бумаг верхнего квинтиля, заменённых за месяц">Оборот</th>
+              <th className="r"><Term k="net">нетто</Term></th>
+              <th className="r"><Term k="turnover">Оборот</Term></th>
             </tr></thead>
             <tbody>{rows.map((x) => (
               <tr key={x.key} className={"pick" + (x.key === f?.key ? " sel" : "")} onClick={() => onSel(x.key)} tabIndex={0}
@@ -225,7 +227,7 @@ function ValuationCard({ v }: { v: ValuationSummary }) {
       <TableWrap label="Качество оценки">
         <table className="compact">
           <thead><tr><th>Мультипликатор</th><th className="r">Компаний</th>
-            <th className="r" title="доля разброса ln мультипликатора, объяснённая вне выборки">R² регрессии</th><th className="r">R² дерева</th>
+            <th className="r"><Term k="r2oos">R² регрессии</Term></th><th className="r">R² дерева</th>
             <th className="r">R² нейросети</th><th className="r">R² базы отрасли</th><th className="pl">Чаще всего отобраны</th></tr></thead>
           <tbody>{Object.entries(v.multiples).map(([k, m]) => (
             <tr key={k}><td>{m.label}</td><td className="r">{num(median(m.n), 0)}</td>

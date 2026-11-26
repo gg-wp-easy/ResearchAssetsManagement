@@ -9,6 +9,8 @@ import { About } from "./About";
 import { Factors } from "./Factors";
 import { MLPage } from "./MLPage";
 import { BookPage } from "./BookPage";
+import { HelpPage } from "./HelpPage";
+import { Guide } from "./help";
 import { DEFAULT_SETTINGS, fromPreset, loadSaved, presetByKey, request, save, type Settings, type UIAsset } from "./state";
 import { applyThemeMode, savedThemeMode, type ThemeMode } from "./theme";
 import { Note } from "./ui";
@@ -20,11 +22,12 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
-function route(): { page: "explore" | "factors" | "ml" | "book" | "theory" | "about"; tab: Tab } {
+function route(): { page: "explore" | "factors" | "ml" | "book" | "theory" | "about" | "help"; tab: Tab } {
   const parts = window.location.hash.replace(/^#\/?/, "").split("?")[0].split("/");
   if (parts[0] === "factors") return { page: "factors", tab: "overview" };
   if (parts[0] === "ml") return { page: "ml", tab: "overview" };
   if (parts[0] === "book") return { page: "book", tab: "overview" };
+  if (parts[0] === "help") return { page: "help", tab: "overview" };
   if (parts[0] === "theory") return { page: "theory", tab: "overview" };
   if (parts[0] === "about") return { page: "about", tab: "overview" };
   const tab = TABS.find((t) => t[0] === parts[1])?.[0] ?? "overview";
@@ -105,6 +108,7 @@ export default function App() {
           <a href="#/book" aria-current={nav.page === "book" ? "page" : undefined}>Портфель из блоков</a>
           <a href="#/theory" aria-current={nav.page === "theory" ? "page" : undefined}>Теория</a>
           <a href="#/about" aria-current={nav.page === "about" ? "page" : undefined}>Исследование бота</a>
+          <a href="#/help" aria-current={nav.page === "help" ? "page" : undefined}>Справка</a>
         </nav>
         <label className="theme">
           <span className="sr">Тема</span>
@@ -119,6 +123,7 @@ export default function App() {
       {nav.page === "factors" && <Factors />}
       {nav.page === "ml" && <MLPage />}
       {nav.page === "book" && <BookPage />}
+      {nav.page === "help" && <HelpPage />}
       {nav.page === "theory" && <Theory />}
       {nav.page === "about" && <About onOpen={openPreset} />}
       {nav.page === "explore" && (
@@ -141,6 +146,7 @@ export default function App() {
                   {busy && <span className="tab-busy">пересчитываю…</span>}
                 </nav>
                 <div className={"section" + (busy ? " stale" : "")}>
+                  <Guide id={nav.tab} />
                   <Section r={result.r} slots={result.slots} />
                 </div>
               </>

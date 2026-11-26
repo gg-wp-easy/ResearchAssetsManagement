@@ -4,6 +4,7 @@ import { bars, Chart, heat, timeLines } from "./charts";
 import { day, month, num, pct, years } from "./format";
 import { slotColor, useTheme } from "./theme";
 import { AssetName, Card, Note, Segmented, TableWrap, Tile, V } from "./ui";
+import { Term } from "./help";
 
 type P = { r: StudyResult; slots: number[] };
 
@@ -16,10 +17,10 @@ export function Summary({ r }: P) {
       <div className="tiles">
         <Tile label={pf ? "Портфель: в год" : "Правило: в год"} value={pct(b.cagr, 1, true)} toneClass={b.cagr >= 0 ? "pos" : "neg"}
           sub={<>{r.meta.bench}: {pct(h.cagr, 1, true)}</>} />
-        <Tile label="Шарп" value={num(b.sharpe, 2)} sub={<>{r.meta.bench}: {num(h.sharpe, 2)}</>} />
-        <Tile label="Просадка" value={pct(b.dd, 1)} sub={<>{day(b.dd_from)} – {day(b.dd_to)}</>} />
-        <Tile label="Волатильность" value={pct(b.vol, 1)} sub={<>худший день {pct(b.worst_day, 1)}</>} />
-        <Tile label="Худший год" value={pct(b.worst_year, 1)} sub={<>скользящие {Math.round(r.meta.ppy)} дн.</>} />
+        <Tile label={<Term k="sharpe">Шарп</Term>} value={num(b.sharpe, 2)} sub={<>{r.meta.bench}: {num(h.sharpe, 2)}</>} />
+        <Tile label={<Term k="dd">Просадка</Term>} value={pct(b.dd, 1)} sub={<>{day(b.dd_from)} – {day(b.dd_to)}</>} />
+        <Tile label={<Term k="vol">Волатильность</Term>} value={pct(b.vol, 1)} sub={<>худший день {pct(b.worst_day, 1)}</>} />
+        <Tile label={<Term k="worst">Худший год</Term>} value={pct(b.worst_year, 1)} sub={<>скользящие {Math.round(r.meta.ppy)} дн.</>} />
       </div>
       <p className="period">
         {day(per.from)} – {day(per.to)}, {years(per.years)} · {per.mode === "common" ? "общий период активов" : "с начала каждого актива"} ·
@@ -52,12 +53,12 @@ export function Overview({ r, slots }: P) {
         <TableWrap label="Активы">
           <table>
             <thead><tr>
-              <th>Актив</th><th>Источник</th><th>Лонг платит</th><th>История</th><th className="r">В год</th><th className="r">Вол.</th><th className="r">Шарп</th>
-              <th className="r">Просадка</th><th className="r" title="индекс хвоста падений, GPD">ξ падений</th><th className="r">ξ роста</th>
-              <th className="r">Эксцесс</th><th className="r">Вол. сейчас</th>
+              <th>Актив</th><th>Источник</th><th><Term k="excess">Лонг платит</Term></th><th>История</th><th className="r">В год</th><th className="r">Вол.</th><th className="r"><Term k="sharpe">Шарп</Term></th>
+              <th className="r"><Term k="dd">Просадка</Term></th><th className="r"><Term k="xi">ξ падений</Term></th><th className="r">ξ роста</th>
+              <th className="r"><Term k="kurtosis">Эксцесс</Term></th><th className="r">Вол. сейчас</th>
               {pf ? <th className="r" title="доля капитала сегодня (веса приведены к 100% по бумагам на бирже)">Вес</th> : <>
-                <th className="r" title="сила тренда сейчас, с пределом шорта">Сила</th>
-                <th className="r" title="номинал полной позиции при выбранном риске, доля капитала">Полная поз.</th></>}
+                <th className="r"><Term k="strength">Сила</Term></th>
+                <th className="r"><Term k="full">Полная поз.</Term></th></>}
             </tr></thead>
             <tbody>
               {o.assets.map((a, j) => {

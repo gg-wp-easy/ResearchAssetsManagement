@@ -3,6 +3,7 @@ import { api, type FactorRequest, type MLLab, type MLRow } from "./api";
 import { FactorDetail, LAB_KEY, savedLabRequest } from "./Factors";
 import { day, num, pct } from "./format";
 import { Card, Note, TableWrap, V } from "./ui";
+import { Guide, Term } from "./help";
 
 export function MLPage() {
   const [req, setReq] = useState<FactorRequest>(savedLabRequest);
@@ -28,6 +29,7 @@ export function MLPage() {
         <h1>ML-прогноз доходности акций</h1>
         <p>Могут ли модели машинного обучения, сложив факторы и оценку SAS, упорядочить акции по доходности следующего месяца лучше одного простого фактора? Модель учится только на прошлом: прогноз на месяц делают модели, обученные на месяцах до него.</p>
       </header>
+      <Guide id="ml" />
 
       <Card>
         <div className="lab-controls">
@@ -63,9 +65,9 @@ export function MLPage() {
               <table className="compact">
                 <thead><tr><th>Модель</th><th className="r">Мес.</th><th className="r">IC</th><th className="r">t(IC)</th>
                   <th className="r" title="верхний квинтиль минус все бумаги поровну, в год">Q5 − все</th>
-                  <th className="r" title="то же после издержек оборота">нетто</th><th className="r">t</th>
+                  <th className="r"><Term k="net">нетто</Term></th><th className="r">t</th>
                   <th className="r" title="доля бумаг верхнего квинтиля, заменённых за месяц">Оборот</th>
-                  <th className="r" title="дефлированный коэффициент Шарпа нетто-доходности">DSR</th><th className="pl">На что смотрит модель</th></tr></thead>
+                  <th className="r"><Term k="dsr">DSR</Term></th><th className="pl"><Term k="importance">На что смотрит модель</Term></th></tr></thead>
                 {res.sets.map((s) => {
                   const rows = res.rows.filter((x) => x.set === s.key);
                   if (!rows.length) return null;

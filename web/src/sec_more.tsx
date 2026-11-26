@@ -4,6 +4,7 @@ import { axis, base, Chart, legend, timeLines, type Option } from "./charts";
 import { day, num, pct, years } from "./format";
 import { slotColor, useTheme } from "./theme";
 import { AssetName, Card, Note, Segmented, TableWrap, Tile, V } from "./ui";
+import { Term } from "./help";
 
 type P = { r: StudyResult; slots: number[] };
 
@@ -41,8 +42,8 @@ export function Drawdown({ r }: P) {
       <Card title="Контроль просадки" sub="Тот же счёт с разными правилами урезания размера при просадке. Сравнение — с вариантом без контроля, разница по неделям (t ≥ 2 по модулю — уже не случайность).">
         <TableWrap label="Контроль просадки">
           <table className="compact">
-            <thead><tr><th>Контроль</th><th className="r">В год</th><th className="r">Шарп</th><th className="r">Просадка</th><th className="r">Calmar</th>
-              <th className="r">Худш. месяц</th><th className="r">Худш. год</th><th className="r">Под водой</th><th className="r">Урезано дней</th>
+            <thead><tr><th>Контроль</th><th className="r">В год</th><th className="r">Шарп</th><th className="r">Просадка</th><th className="r"><Term k="calmar">Calmar</Term></th>
+              <th className="r">Худш. месяц</th><th className="r">Худш. год</th><th className="r"><Term k="underwater">Под водой</Term></th><th className="r">Урезано дней</th>
               <th className="r">Против без контроля</th></tr></thead>
             <tbody>{D.rows.map((row, i) => (
               <tr key={i} className={row.chosen ? "sel" : ""}>
@@ -97,7 +98,7 @@ export function Regimes({ r, slots }: P) {
   return (
     <>
       <div className="tiles">
-        <Tile label="Сейчас плохой режим" value={pct(G.now, 0)} sub="фильтр Гамильтона, последняя неделя" toneClass={G.now > 0.5 ? "neg" : ""} />
+        <Tile label={<Term k="regime">Сейчас плохой режим</Term>} value={pct(G.now, 0)} sub="фильтр Гамильтона, последняя неделя" toneClass={G.now > 0.5 ? "neg" : ""} />
         <Tile label="Доля плохих недель" value={pct(bad.share, 0)} sub={`в среднем ${num(bad.duration_weeks, 0)} нед. подряд`} />
         <Tile label="Волатильность в плохом режиме" value={`×${num(bad.mkt_vol / calm.mkt_vol, 1)}`} sub="к спокойному, корзина равного риска" />
         <Tile label="Средняя корреляция" value={`${num(calm.avg_corr, 2)} → ${num(bad.avg_corr, 2)}`} sub="между активами" />
@@ -165,7 +166,7 @@ export function Allocation({ r, slots }: P) {
         <TableWrap label="Методы распределения">
           <table className="compact">
             <thead><tr><th>Метод</th><th className="r">В год</th><th className="r">Вол.</th><th className="r">Шарп</th><th className="r">Просадка</th>
-              <th className="r">Худшая неделя</th><th className="r">CVaR 95% нед.</th><th className="r">Оборот</th><th className="pl">Веса сейчас</th></tr></thead>
+              <th className="r">Худшая неделя</th><th className="r"><Term k="var">CVaR 95% нед.</Term></th><th className="r">Оборот</th><th className="pl">Веса сейчас</th></tr></thead>
             <tbody>{A.rows.map((row) => (
               <tr key={row.key} className={row.key === "book" ? "sel" : ""}>
                 <td>{row.title}</td><td className="r"><V x={row.cagr} f={(x) => pct(x, 1, true)} /></td><td className="r">{pct(row.vol, 1)}</td>
@@ -227,7 +228,7 @@ export function Sizing({ r }: P) {
     <>
       <div className="tiles">
         <Tile label="Шарп" value={`${num(S.sharpe, 2)} ± ${num(2 * S.se, 2)}`} sub={`два стандартных отклонения, ${years(S.years)}`} />
-        <Tile label="Келли: плечо к счёту" value={num(K.f_star, 1) + "×"} sub={`волатильность Келли ${pct(K.kelly_vol, 0)}`} />
+        <Tile label={<Term k="kelly">Келли: плечо к счёту</Term>} value={num(K.f_star, 1) + "×"} sub={`волатильность Келли ${pct(K.kelly_vol, 0)}`} />
         <Tile label="Счёт держит" value={num(K.c_now, 2) + " Келли"} sub={K.growth_now !== null ? `${pct(K.growth_now, 0)} максимального роста` : ""} />
         <Tile label="c* с ошибкой оценки" value={num(K.c_star, 2)} sub="T·SR² / (T·SR² + 1)" />
       </div>

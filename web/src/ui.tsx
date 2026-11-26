@@ -11,7 +11,7 @@ export function Card({ title, sub, children, id }: { title?: string; sub?: React
   );
 }
 
-export function Tile({ label, value, sub, toneClass }: { label: string; value: string; sub?: ReactNode; toneClass?: string }) {
+export function Tile({ label, value, sub, toneClass }: { label: ReactNode; value: string; sub?: ReactNode; toneClass?: string }) {
   return (
     <div className="tile">
       <div className="tile-label">{label}</div>

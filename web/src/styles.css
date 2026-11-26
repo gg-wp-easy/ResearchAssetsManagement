@@ -307,3 +307,44 @@ ul.foot { padding-left: 1.2rem; margin-top: 0.2rem; }
   .lab .grid2, .book-today { grid-template-columns: minmax(0, 1fr); }
 }
 td.book-scen { min-width: 15rem; }
+
+/* ---------------------------------------------------------------- help: terms, guides, the help page */
+.term { text-decoration: underline dotted color-mix(in srgb, var(--ink-3) 70%, transparent); text-underline-offset: 3px; text-decoration-thickness: 1px; cursor: help; border-radius: 2px; }
+.term:hover, .term:focus-visible { text-decoration-color: var(--accent); outline: none; background: var(--accent-soft); }
+.term-tip { position: fixed; z-index: 1000; width: min(340px, calc(100vw - 16px)); box-sizing: border-box; background: var(--sheet); color: var(--ink);
+  border: 1px solid var(--rule); border-radius: 8px; padding: 0.6rem 0.8rem; box-shadow: 0 6px 22px rgb(0 0 0 / 0.16);
+  font: 400 0.84rem/1.45 var(--font-ui); text-align: left; letter-spacing: normal; text-transform: none; white-space: normal; }
+.term-tip.up { transform: translateY(-100%); }
+.term-tip b { display: block; margin-bottom: 0.2rem; font-weight: 600; }
+.term-tip p { margin: 0 0 0.35rem; color: var(--ink-2); }
+.term-tip a { font-size: 0.8rem; color: var(--accent); }
+.guide { border: 1px solid var(--rule); border-left: 3px solid var(--accent); background: var(--sheet); border-radius: 0 var(--radius) var(--radius) 0; padding: 0.55rem 0.9rem; font-size: 0.9rem; }
+.guide summary { cursor: pointer; color: var(--ink-2); }
+.guide summary::marker { color: var(--accent); }
+.guide-q { font-weight: 600; color: var(--accent); margin-right: 0.3rem; }
+.guide ul { margin: 0.5rem 0 0.3rem; padding-left: 1.2rem; display: grid; gap: 0.3rem; color: var(--ink); }
+.guide-trap { margin: 0.3rem 0; color: var(--ink-2); }
+.guide-trap b { color: var(--ink); }
+.guide-more { margin: 0.3rem 0 0; font-size: 0.8rem; color: var(--ink-3); }
+.section > .guide, .lab > .guide { margin-bottom: 0.2rem; }
+.help .doc-sec h3 { font-family: var(--font-ui); font-size: 1.08rem; margin: 0.6rem 0 0.1rem; }
+.help-paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); gap: 0.8rem; font-family: var(--font-ui); font-size: 0.9rem; }
+.help-path { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--sheet); padding: 0.8rem 0.95rem; display: grid; gap: 0.5rem; align-content: start; }
+.help-path h3 { margin: 0 !important; font-size: 1rem !important; }
+.help-path ol { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.3rem; }
+.help-path a.ghost { justify-self: start; text-decoration: none; }
+.help-guide { border-top: 1px solid var(--rule); padding-top: 0.4rem; }
+.help-guide ul { padding-left: 1.2rem; display: grid; gap: 0.3rem; }
+.help-q { color: var(--ink-2); font-style: italic; }
+.help-groups { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-family: var(--font-ui); font-size: 0.88rem; }
+.help-terms { margin: 0; display: grid; gap: 0.2rem; }
+.help-term { display: grid; grid-template-columns: minmax(9rem, 14rem) minmax(0, 1fr); gap: 0.2rem 1.2rem; padding: 0.55rem 0.4rem; border-top: 1px solid var(--grid); border-radius: 4px; transition: background 0.4s; }
+.help-term dt { font-family: var(--font-ui); font-weight: 600; font-size: 0.95rem; }
+.help-term dd { margin: 0; display: grid; gap: 0.35rem; font-size: 0.98rem; }
+.help-faq { border-top: 1px solid var(--grid); padding: 0.5rem 0; }
+.help-faq summary { cursor: pointer; font-family: var(--font-ui); font-weight: 500; }
+.help-faq p { margin: 0.4rem 0 0 !important; }
+.flash { background: var(--accent-soft) !important; }
+@media (max-width: 640px) { .help-term { grid-template-columns: minmax(0, 1fr); } }
+.help .doc-sec, .help-term, .help-guide, .help [id^="g-"] { scroll-margin-top: 76px; }
+@media (max-width: 640px) { .help td.nowrap { white-space: normal; } }

@@ -4,6 +4,7 @@ import { axis, base, Chart, legend, legendTop, timeLines, type Option } from "./
 import { day, num, pct } from "./format";
 import { useTheme, type Theme } from "./theme";
 import { Card, Note, Segmented, TableWrap, Tile, V } from "./ui";
+import { Guide, Term } from "./help";
 
 const KEY = "ram.book.v1";
 const DEFAULT: BookRequest = {
@@ -67,6 +68,7 @@ export function BookPage() {
         <h1>Портфель из блоков</h1>
         <p>Акции, отобранные факторной лабораторией, облигации, тренд бота и деньги в одном счёте. Доли задаёт бюджет риска. Предел режет их так, чтобы ни один сценарий из списка не забрал больше заданной доли капитала. Каждое решение принимается только по тому, что было известно на его дату, и записывается в журнал с причиной.</p>
       </header>
+      <Guide id="book" />
 
       <Card>
         <div className="lab-controls">
@@ -98,7 +100,7 @@ export function BookPage() {
         <div className="lab-controls book-budget">
           {SLEEVES.slice(0, 3).map((s, i) => (
             <label key={s} className="field num-field">
-              <span>{s}, {share ? "% риска" : "% капитала"}</span>
+              <span>{s}, {share ? <Term k="risk_budget">% риска</Term> : "% капитала"}</span>
               <input type="number" min={0} max={100} step={5} value={Math.round(req.budget[i] * 1000) / 10}
                 onChange={(e) => setBudget(i, Number(e.target.value))} />
               {share && <small>{num(shown(req.budget[i]), 0)}% после нормировки</small>}
@@ -106,20 +108,20 @@ export function BookPage() {
           ))}
           {share && (
             <label className="field">
-              <span>Цель волатильности</span>
+              <span><Term k="target_vol">Цель волатильности</Term></span>
               <select value={req.target_vol} onChange={(e) => setReq({ ...req, target_vol: Number(e.target.value) })}>
                 {[0.04, 0.06, 0.08, 0.10, 0.12, 0.15, 0.20].map((v) => <option key={v} value={v}>{pct(v, 0)} в год</option>)}
               </select>
             </label>
           )}
           <label className="field">
-            <span>Предел потерь в сценарии</span>
+            <span><Term k="scenario_cap">Предел потерь в сценарии</Term></span>
             <select value={req.limit} onChange={(e) => setReq({ ...req, limit: Number(e.target.value) })}>
               {[0, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50].map((v) => <option key={v} value={v}>{v ? pct(v, 0) + " капитала" : "без предела"}</option>)}
             </select>
           </label>
           <label className="field">
-            <span>Контроль просадки счёта</span>
+            <span><Term k="control">Контроль просадки счёта</Term></span>
             <select value={req.control} onChange={(e) => setReq({ ...req, control: Number(e.target.value) })}>
               {controls.map((c, i) => <option key={c} value={i}>{c}</option>)}
             </select>
@@ -167,9 +169,9 @@ function BookResultView({ r, stale }: { r: BookResult; stale: boolean }) {
       <div className="tiles">
         <Tile label="В год" value={pct(book.cagr, 1, true)} sub={`деньги ${pct(r.rows.find((x) => x.key === "cash")?.cagr, 1)}`} />
         <Tile label="Волатильность" value={pct(book.vol, 1)} sub="недельная, в год" />
-        <Tile label="Шарп над деньгами" value={num(book.sharpe, 2)} sub={`±${num(2 * r.tests.book.se, 2)} (2σ) за ${num(r.tests.book.years, 1)} лет`} />
-        <Tile label="Наибольшая просадка" value={pct(book.dd, 1)} sub={`${day(book.dd_from)} – ${day(book.dd_to)}`} />
-        <Tile label="Худший сценарий сейчас" value={pct(worstNow ? -worstNow.loss : null, 1, true)} sub={worstNow?.label} />
+        <Tile label={<Term k="sharpe">Шарп над деньгами</Term>} value={num(book.sharpe, 2)} sub={`±${num(2 * r.tests.book.se, 2)} (2σ) за ${num(r.tests.book.years, 1)} лет`} />
+        <Tile label={<Term k="dd">Наибольшая просадка</Term>} value={pct(book.dd, 1)} sub={`${day(book.dd_from)} – ${day(book.dd_to)}`} />
+        <Tile label={<Term k="scenario_cap">Худший сценарий сейчас</Term>} value={pct(worstNow ? -worstNow.loss : null, 1, true)} sub={worstNow?.label} />
         <Tile label="Деньги сейчас" value={pct(td.w[3], 0)} sub={`последнее решение ${day(td.latest)}`} />
       </div>
 
@@ -275,9 +277,9 @@ function Compare({ r }: { r: BookResult }) {
   const sleeves = r.rows.filter((x) => x.kind === "sleeve");
   const line = (x: BookRow) => r.series.equity[x.key] && ["book", "no_cap", "6040", "equity:mcftr", "cash"].includes(x.key) || x.key.startsWith("trend:");
   const head = (
-    <tr><th>Портфель</th><th className="r">В год</th><th className="r">Вол.</th><th className="r" title="над деньгами">Шарп</th>
+    <tr><th>Портфель</th><th className="r">В год</th><th className="r">Вол.</th><th className="r"><Term k="sharpe">Шарп</Term></th>
       <th className="r">Просадка</th><th className="r" title="худшие 4 недели подряд">4 нед.</th>
-      <th className="r" title="наибольшая потеря в сценарии на долях любой недели">Худш. сценарий</th>
+      <th className="r"><Term k="scenario_cap">Худш. сценарий</Term></th>
       <th className="r" title="средняя доля денег">Деньги</th><th className="r" title="перенос капитала между блоками в год, в одну сторону">Оборот</th></tr>
   );
   const row = (x: BookRow) => (
@@ -464,7 +466,7 @@ function Log({ r }: { r: BookResult }) {
       <TableWrap label="Журнал решений">
         <table className="compact">
           <thead><tr><th>Дата</th><th>Решение</th><th>Доли</th>
-            <th>Худший сценарий</th><th title="какую долю цели каждого блока оставил предел: акции / облигации / тренд">Срез</th><th className="r" title="позиции тренда: юань, золото, MCFTR, ОФЗ — доля капитала блока">Тренд</th>
+            <th>Худший сценарий</th><th><Term k="cut">Срез</Term></th><th className="r" title="позиции тренда: юань, золото, MCFTR, ОФЗ — доля капитала блока">Тренд</th>
             <th title="наведите — какие бумаги купить и продать">Отбор</th><th className="r">Итог</th></tr></thead>
           <tbody>
             {rows.slice(0, n).map((d) => (
