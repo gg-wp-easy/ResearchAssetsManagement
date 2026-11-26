@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Meta, type StudyResult } from "./api";
 import { Basket } from "./Basket";
 import { Overview, Rule, Summary } from "./sec_main";
@@ -10,6 +10,8 @@ import { Factors } from "./Factors";
 import { MLPage } from "./MLPage";
 import { BookPage } from "./BookPage";
 import { HelpPage } from "./HelpPage";
+import { EventsPage } from "./EventsPage";
+import { EventsNote } from "./eventsUi";
 import { Guide } from "./help";
 import { DEFAULT_SETTINGS, fromPreset, loadSaved, presetByKey, request, save, type Settings, type UIAsset } from "./state";
 import { applyThemeMode, savedThemeMode, type ThemeMode } from "./theme";
@@ -22,12 +24,13 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
-function route(): { page: "explore" | "factors" | "ml" | "book" | "theory" | "about" | "help"; tab: Tab } {
+function route(): { page: "explore" | "factors" | "ml" | "book" | "events" | "theory" | "about" | "help"; tab: Tab } {
   const parts = window.location.hash.replace(/^#\/?/, "").split("?")[0].split("/");
   if (parts[0] === "factors") return { page: "factors", tab: "overview" };
   if (parts[0] === "ml") return { page: "ml", tab: "overview" };
   if (parts[0] === "book") return { page: "book", tab: "overview" };
   if (parts[0] === "help") return { page: "help", tab: "overview" };
+  if (parts[0] === "events") return { page: "events", tab: "overview" };
   if (parts[0] === "theory") return { page: "theory", tab: "overview" };
   if (parts[0] === "about") return { page: "about", tab: "overview" };
   const tab = TABS.find((t) => t[0] === parts[1])?.[0] ?? "overview";
@@ -47,25 +50,37 @@ export default function App() {
   const [mode, setMode] = useState<ThemeMode>(savedThemeMode);
 
   useEffect(() => { applyThemeMode(mode); }, [mode]);
+  // #/explore/<tab>?preset=<key>[&drop=EUTR,LSRG]: open a ready basket (without the dropped shares) and compute it at once
+  const openLinked = (m: Meta): boolean => {
+    const q = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    const linked = q.get("preset") ? presetByKey(m, q.get("preset")!) : undefined;
+    if (!linked) return false;
+    const s = fromPreset(linked);
+    const drop = (q.get("drop") ?? "").split(",").filter(Boolean);
+    if (drop.length) s.assets = s.assets.filter((a) => !drop.includes(a.id.split(":").pop() ?? ""));
+    setAssets(s.assets);
+    setSettings(s.settings);
+    setBusy(true);
+    setError("");
+    api.study(request(s.assets, s.settings)).then((r) => setResult({ r, slots: s.assets.map((x) => x.slot) }))
+      .catch((e) => setError((e as Error).message)).finally(() => setBusy(false));
+    window.history.replaceState(null, "", window.location.hash.split("?")[0]);  // the link is used once
+    return true;
+  };
+  const metaRef = useRef<Meta | null>(null);
   useEffect(() => {
-    const on = () => setNav(route());
+    const on = () => {
+      setNav(route());
+      if (metaRef.current && window.location.hash.includes("preset=")) openLinked(metaRef.current);
+    };
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     api.meta().then((m) => {
       setMeta(m);
-      // #/explore/<tab>?preset=<key>: open a ready basket and compute it at once (a link to share)
-      const asked = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("preset");
-      const linked = asked ? presetByKey(m, asked) : undefined;
-      if (linked) {
-        const s = fromPreset(linked);
-        setAssets(s.assets);
-        setSettings(s.settings);
-        setBusy(true);
-        api.study(request(s.assets, s.settings)).then((r) => setResult({ r, slots: s.assets.map((x) => x.slot) }))
-          .catch((e) => setError((e as Error).message)).finally(() => setBusy(false));
-      } else if (!saved || saved.assets.length === 0) {
+      metaRef.current = m;
+      if (!openLinked(m) && (!saved || saved.assets.length === 0)) {
         const p = presetByKey(m, "main");
         if (p) { const s = fromPreset(p); setAssets(s.assets); setSettings(s.settings); }
       }
@@ -106,6 +121,7 @@ export default function App() {
           <a href="#/factors" aria-current={nav.page === "factors" ? "page" : undefined}>Факторы акций</a>
           <a href="#/ml" aria-current={nav.page === "ml" ? "page" : undefined}>ML-прогноз</a>
           <a href="#/book" aria-current={nav.page === "book" ? "page" : undefined}>Портфель из блоков</a>
+          <a href="#/events" aria-current={nav.page === "events" ? "page" : undefined}>События</a>
           <a href="#/theory" aria-current={nav.page === "theory" ? "page" : undefined}>Теория</a>
           <a href="#/about" aria-current={nav.page === "about" ? "page" : undefined}>Исследование бота</a>
           <a href="#/help" aria-current={nav.page === "help" ? "page" : undefined}>Справка</a>
@@ -113,7 +129,7 @@ export default function App() {
         <label className="theme">
           <span className="sr">Тема</span>
           <select value={mode} onChange={(e) => setMode(e.target.value as ThemeMode)} aria-label="Тема">
-            <option value="system">тема: как в системе</option>
+            <option value="system">тема: авто</option>
             <option value="light">светлая</option>
             <option value="dark">тёмная</option>
           </select>
@@ -124,6 +140,7 @@ export default function App() {
       {nav.page === "ml" && <MLPage />}
       {nav.page === "book" && <BookPage />}
       {nav.page === "help" && <HelpPage />}
+      {nav.page === "events" && <EventsPage />}
       {nav.page === "theory" && <Theory />}
       {nav.page === "about" && <About onOpen={openPreset} />}
       {nav.page === "explore" && (
@@ -138,6 +155,7 @@ export default function App() {
             {result && (
               <>
                 <Summary r={result.r} slots={result.slots} />
+                <EventsNote r={result.r} assets={assets} onAssets={setAssets} onRun={(a) => run(a)} />
                 <nav className="tabs" aria-label="Разделы исследования">
                   {TABS.map(([key, label]) => (
                     <a key={key} href={`#/explore/${key}`} aria-current={nav.tab === key ? "page" : undefined}>

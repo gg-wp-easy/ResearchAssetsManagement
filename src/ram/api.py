@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, book, factors, ml, sas, sources
+from . import __version__, book, events, factors, ml, sas, sources, watch
 from .net import NotFound
 from .presets import PRESETS
 from .rule import CONTROLS, Params
@@ -144,6 +144,59 @@ def book_report(req: dict) -> dict:
         except (ValueError, KeyError, TypeError) as e:
             raise HTTPException(400, str(e)) from e
     return _remember(key, res)
+
+
+def _forget() -> None:
+    """The stop list or the news changed: every computed study and the book's sleeves are stale."""
+    with _lock:
+        _results.clear()
+    book._cache.clear()
+
+
+@app.get("/api/events/feed")
+def events_feed(days: int = Query(90, ge=1, le=1500), level: str | None = Query(None, pattern="^(exclude|warn)$")) -> dict:
+    """The exchange's events (events.py) of the last `days`: defaults, bankruptcy, delisting, the high-risk sector..."""
+    return clean(events.feed(days, level))
+
+
+@app.post("/api/events/check")
+def events_check(req: dict) -> dict:
+    codes = [str(c).strip().upper() for c in req.get("codes", []) if str(c).strip()]
+    if not codes or len(codes) > 300:
+        raise HTTPException(400, "коды бумаг: от 1 до 300 тикеров или ISIN")
+    return clean(events.check(codes))
+
+
+@app.get("/api/events/portfolios")
+def events_portfolios() -> dict:
+    """server-analytic-system's portfolios and the book's picks against the events, the weights without the excluded."""
+    with _factor_lock:
+        return clean(watch.portfolios())
+
+
+@app.get("/api/events/stoplist")
+def stoplist_get() -> dict:
+    return {"items": events.stoplist()}
+
+
+@app.put("/api/events/stoplist")
+def stoplist_put(req: dict) -> dict:
+    try:
+        items = events.save_stoplist(list(req.get("items", [])))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    _forget()
+    return {"items": items}
+
+
+@app.post("/api/events/update")
+def events_update() -> dict:
+    try:
+        events.update(force=True)
+    except Exception as e:  # the exchange did not answer
+        raise HTTPException(502, f"лента Мосбиржи не ответила: {e}") from e
+    _forget()
+    return clean(events.all_events(refresh=False)[1])
 
 
 @app.get("/api/sas")

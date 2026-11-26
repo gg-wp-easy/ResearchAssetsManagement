@@ -83,6 +83,12 @@ export function Basket(props: {
             {meta?.controls.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
           </select>
         </label>
+        {assets.some((a) => a.id.startsWith("moex:shares:")) && (
+          <label className="check" title="новости Мосбиржи: дефолт, банкротство, делистинг, приостановка торгов, сектор повышенного риска, стоп-лист">
+            <input type="checkbox" checked={settings.events} onChange={(e) => set("events", e.target.checked)} />
+            продавать акцию на следующий день после события Мосбиржи (дефолт, банкротство, делистинг)
+          </label>
+        )}
         <details className="more">
           <summary>Издержки, ГО, период</summary>
           <div className="grid2">

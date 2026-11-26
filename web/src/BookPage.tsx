@@ -188,6 +188,7 @@ function BookResultView({ r, stale }: { r: BookResult; stale: boolean }) {
         <p><b>Сценарии.</b> Сценарий — совместный ход четырёх рынков тренда бота: юаня, золота в рублях, MCFTR и ОФЗ. Это гипотетические сценарии бота и кризисные окна, закончившиеся до даты решения; длинные окна берутся по каждым 5 дням. Блок акций движется как бета к MCFTR (не меньше 1: в обвал корреляции растут), облигации — как ОФЗ, тренд — как его позиции на эту дату (в гэп их не успеть развернуть).</p>
         <p><b>Предел.</b> Если какой-то сценарий забирает больше предела, линейная программа оставляет как можно больше бюджета риска и режет в первую очередь блок, который теряет больше всего на единицу своего риска. Хедж при этом не трогается. Срез доводит потерю до 95% предела, чтобы дрейф долей не срабатывал на следующей неделе.</p>
         <p><b>Между концами месяцев.</b> Каждую неделю цель месяца (умноженная на множитель контроля просадки) заново проверяется пределом на позициях тренда этой недели. Счёт идёт к цели, если на текущих долях какой-то сценарий превышает предел («срез») или если блок отошёл от цели больше чем на 5 п. п. («к цели»: тренд развернул позиции, сработал контроль, доли уплыли с ценами).</p>
+        <p><b>События Мосбиржи.</b> Отбор акций не берёт бумаги с действующим <Term k="exchange_event">событием «продать»</Term> (дефолт, банкротство, делистинг, выкуп, сектор повышенного риска, стоп-лист), а бумагу, о которой новость пришла внутри месяца, продаёт в конце той же недели и делит её долю между остальными. Лента учтена с {day(r.meta.events_from)}; раньше фильтра нет. Строка «без фильтра событий» показывает, что он изменил.</p>
         <p><b>Чего здесь нет.</b> Налогов. Комиссий фондов облигаций (берутся индексы полной доходности). Риска банка или брокера, держащего деньги. Тренд-блок держит свой капитал в деньгах и платит издержки бота; его позиции — доля капитала блока (по ОФЗ полная позиция — около двух капиталов: у ОФЗ малая волатильность). Четыре фактора отбора выбраны факторной лабораторией на той же истории, поэтому отбор «на истории» — не полностью вне выборки.</p>
       </Note>
     </div>
@@ -227,9 +228,14 @@ function Today({ r }: { r: BookResult }) {
         <div>
           <h4 className="mini-title">Акции блока{td.picked ? ` (отбор ${day(td.picked)})` : ""}</h4>
           {td.picks.length ? (
-            <ul className="chips">{td.picks.map((p) => <li key={p.ticker} className="chip" title={p.name}>{p.ticker}</li>)}</ul>
+            <ul className="chips">{td.picks.map((p) => (
+              <li key={p.ticker} className={"chip" + (p.sold || p.status === "exclude" ? " ev-exclude" : p.status === "warn" ? " ev-warn" : "")}
+                title={p.name + (p.events.length ? " · " + p.events.map((e) => `${e.date} ${e.kind_title}${e.detail ? " " + e.detail : ""}`).join("; ") : "")}>
+                {p.sold || p.status === "exclude" ? "⛔ " : p.status === "warn" ? "⚠ " : ""}{p.ticker}</li>
+            ))}</ul>
           ) : <p className="hint">Блок акций — индекс MCFTR, отбора нет.</p>}
-          {td.picks.length > 0 && <p className="hint">Поровну на дату отбора, дальше доли плывут с ценами до следующего конца месяца.</p>}
+          {td.picks.length > 0 && <p className="hint">Поровну на дату отбора, дальше доли плывут с ценами до следующего конца месяца.
+            {td.picks.some((p) => p.status !== "ok" || p.sold) && <> ⛔ — <Term k="exchange_event">событие Мосбиржи</Term> «продать» (продана, доля поделена между остальными), ⚠ — «проверить»; наведите на бумагу. Подробно — на странице <a href="#/events">«События»</a>.</>}</p>}
         </div>
       </div>
     </Card>
@@ -472,14 +478,15 @@ function Log({ r }: { r: BookResult }) {
             {rows.slice(0, n).map((d) => (
               <tr key={d.date + d.kind}>
                 <td className="nowrap">{day(d.date)}</td>
-                <td className="nowrap">{d.kind === "rebalance" ? "ребалансировка" : d.kind === "cut" ? <span className="neg">срез</span> : "к цели"}{d.vol !== undefined && d.vol !== null && <span className="muted" title="ожидаемая волатильность долей бюджета, до предела"> · σ {pct(d.vol, 1)}</span>}{d.m < 1 && <span className="muted"> · контроль ×{num(d.m, 2)}</span>}</td>
+                <td className="nowrap">{d.kind === "rebalance" ? "ребалансировка" : d.kind === "cut" ? <span className="neg">срез</span> : d.kind === "event" ? <span className="neg">продажа акции</span> : "к цели"}{d.vol !== undefined && d.vol !== null && <span className="muted" title="ожидаемая волатильность долей бюджета, до предела"> · σ {pct(d.vol, 1)}</span>}{d.m < 1 && <span className="muted"> · контроль ×{num(d.m, 2)}</span>}</td>
                 <td className="nowrap">
                   <span className="book-mini" aria-label={SLEEVES.map((s, i) => `${s} ${pct(d.w[i], 0)}`).join(", ")}>
                     {d.w.map((w, i) => <i key={i} style={{ width: `${w * 100}%`, background: sleeveColor(t, i) }} />)}
                   </span>
                   <span className="muted"> {d.w.slice(0, 3).map((w) => pct(w, 0)).join(" / ")}</span>
                 </td>
-                <td className="book-scen">{d.scenario} <span className="nowrap"><V x={-d.loss_before} f={(v) => pct(v, 0, true)} /> → <V x={-d.loss_after} f={(v) => pct(v, 0, true)} /></span></td>
+                {d.kind === "event" ? <td className="book-scen"><b>{d.name}</b> <span className="muted">{d.ticker}</span> — {d.event} ({pct(d.share, 1)} блока акций), новость {day(d.news)}{d.url && <> · <a href={d.url} target="_blank" rel="noreferrer">биржа</a></>}</td> :
+                <td className="book-scen">{d.scenario} <span className="nowrap"><V x={-d.loss_before} f={(v) => pct(v, 0, true)} /> → <V x={-d.loss_after} f={(v) => pct(v, 0, true)} /></span></td>}
                 <td className="nowrap">{cutText(d)}</td>
                 <td className="r nowrap muted">{d.pos.map((p) => num(p, 1, true)).join(" ")}</td>
                 <td className="nowrap">{d.added?.length || d.removed?.length ? (

@@ -38,6 +38,14 @@ def main(argv: list[str] | None = None) -> int:
     bk.add_argument("--limit", type=float, default=0.25, help="предел потерь в любом сценарии (0 — без предела)")
     bk.add_argument("--control", type=int, default=0, help="контроль просадки: номер из списка правила")
     bk.add_argument("--start", default="2016-01-01")
+    ev = sub.add_parser("events", help="события Мосбиржи: дефолты, банкротства, делистинг, сектор повышенного риска")
+    ev.add_argument("--update", action="store_true", help="перечитать ленту новостей биржи сейчас")
+    ev.add_argument("--since", help="дочитать ленту вглубь до даты (по умолчанию — два года)")
+    ev.add_argument("--days", type=int, default=30, help="лента за столько дней")
+    ev.add_argument("--check", nargs="*", help="проверить бумаги: тикеры или ISIN")
+    ev.add_argument("--portfolios", action="store_true", help="проверить портфели SAS и отбор портфеля из блоков")
+    ev.add_argument("--stop", nargs="+", metavar=("КОД", "ПРИЧИНА"), help="добавить бумагу в стоп-лист")
+    ev.add_argument("--unstop", help="убрать бумагу из стоп-листа")
     va = sub.add_parser("valuation", help="оценка server-analytic-system на дату и сверка с его срезом")
     va.add_argument("--date", default="2025-10-31")
     a = ap.parse_args(argv)
@@ -115,6 +123,42 @@ def main(argv: list[str] | None = None) -> int:
             what = {"rebalance": "ребалансировка", "cut": "срез", "adjust": "к цели"}[r["kind"]]
             print(f"  {r['date']} {what}: " + ", ".join(f"{n} {w:.0%}" for n, w in zip(m["sleeves"], r["w"]))
                   + f" · {r['scenario']} {-r['loss_before']:+.0%} → {-r['loss_after']:+.0%}")
+        return 0
+    if a.cmd == "events":
+        from . import events
+        if a.update or a.since:
+            events.update(since=a.since, force=True, progress=lambda m: print("  " + m, file=sys.stderr))
+        if a.stop:
+            items = [x for x in events.stoplist() if x["code"] != a.stop[0].upper()]
+            events.save_stoplist(items + [{"code": a.stop[0], "reason": " ".join(a.stop[1:])}])
+        if a.unstop:
+            events.save_stoplist([x for x in events.stoplist() if x["code"] != a.unstop.upper()])
+        evs, cov = events.all_events(refresh=not (a.update or a.since))
+        print(f"Лента Мосбиржи: {cov['from']}..{cov['to']}, {cov['news']} новостей, прочитано {cov['read']}; "
+              f"стоп-лист: {', '.join(x['code'] for x in events.stoplist()) or 'пуст'}")
+        if a.check:
+            for code, r in events.check(a.check, evs).items():
+                print(f"  {code:14} {r['status']:8} {r['issuer'][:50]}")
+                for e in r["events"][:5]:
+                    print(f"      {e['date']} {e['kind_title']:28} {e['reason'][:90]} {e['detail']}")
+            return 0
+        if a.portfolios:
+            from .watch import portfolios
+            for pf in portfolios()["portfolios"]:
+                if pf.get("error"):
+                    print(f"  {pf['title']}: {pf['error']}")
+                    continue
+                print(f"  {pf['title']} ({pf['date']}): исключить {pf['excluded']} ({pf['excluded_weight']:.1%} веса), "
+                      f"внимание {pf['warned']}")
+                for x in pf["positions"]:
+                    if x["status"] != "ok":
+                        e = x["events"][0]
+                        print(f"      {x['status']:8} {x['code']:14} {x['name'][:24]:24} {x['weight']:6.1%} → {x['after']:6.1%}"
+                              f"  {e['date']} {e['kind_title']}")
+            return 0
+        lo = (__import__("datetime").date.today() - __import__("datetime").timedelta(days=a.days)).isoformat()
+        for e in [e for e in evs if e.date >= lo and e.level == "exclude"]:
+            print(f"  {e.date} {events.KINDS[e.kind][0]:26} {e.issuer[:44]:44} {','.join(e.codes[:2]):28} {e.reason[:60]}")
         return 0
     if a.cmd == "valuation":
         from . import universe, valuation

@@ -1,13 +1,14 @@
 """The whole study of a basket, as one JSON-ready dict (the site's /api/study and `ram study`)."""
 from __future__ import annotations
 
+import bisect
 import math
 import time
 from dataclasses import replace
 
 import numpy as np
 
-from . import allocation, bootstrap, regimes, scenarios, sizing, tails
+from . import allocation, bootstrap, events, regimes, scenarios, sizing, tails
 from .assets import AssetSpec, Basket, build, weekly
 from .metrics import drawdown, equity, perf, period_returns, thin, weekly_t
 from .rule import (CONTROLS, Control, Params, Signal, full_size_today, independent, multipliers, portfolio_weights, signal,
@@ -29,12 +30,52 @@ def parse(req: dict) -> tuple[list[AssetSpec], Params, Control, dict]:
     opts = {"start": req.get("start"), "end": req.get("end"), "period": req.get("period", "common"),
             "history_from": req.get("history_from"), "money_share": float(req.get("money_share", 0.5)),
             "windows": req.get("windows", []), "bootstrap_paths": int(req.get("bootstrap_paths", 4000)),
-            "cov": req.get("cov", "shrunk")}
+            "cov": req.get("cov", "shrunk"), "events": req.get("events", "exit")}
+    if opts["events"] not in EVENT_MODES:
+        raise ValueError(f"события: один из {', '.join(EVENT_MODES)}")
     if opts["cov"] not in allocation.COVS:
         raise ValueError(f"ковариация {opts['cov']!r}: одна из {', '.join(allocation.COVS)}")
     if params.signal == "weights" and not sum(s.weight for s in specs) > 0:
         raise ValueError("у портфеля нет весов: задайте вес хотя бы одному активу")
     return specs, params, control, opts
+
+
+EVENT_MODES = ("exit", "mark", "off")
+
+
+def apply_events(b: Basket, mode: str) -> dict:
+    """Moscow Exchange's events for the basket's MOEX shares (events.py): their status today and, in mode "exit", the
+    portfolio's exit - the share is held through the close of the first trading day after the news and is out while
+    the event lasts (b.alive is cleared, so the rule closes it and a portfolio spreads its weight over the rest)."""
+    codes = {j: sp.id.split(":")[-1] for j, sp in enumerate(b.specs) if sp.id.startswith("moex:shares:")}
+    out: dict = {"mode": mode, "assets": [None] * b.n, "masked": False, "coverage": None}
+    if not codes or mode == "off":
+        return out
+    evs, cov = events.all_events()
+    out["coverage"] = cov
+    checks = events.check(list(codes.values()), evs)
+    spans = events.exits(evs) if mode == "exit" else {}
+    for j, code in codes.items():
+        sold, why = None, None
+        for a, z, e in spans.get(code, []):
+            k = min(bisect.bisect_right(b.dates, a), len(b.dates) - 1)  # the first trading day after the news
+            if not b.alive[k, j] or a > b.dates[-1] and z < b.dates[-1]:
+                continue
+            end = bisect.bisect_right(b.dates, z)
+            if k == len(b.dates) - 1:  # the news came after the data: out of today's book, the history untouched
+                b.alive[k, j] = False
+            else:
+                b.alive[k + 1:end + 1, j] = False
+            out["masked"] = True
+            if sold is None:
+                sold, why = b.dates[k], e
+        c = checks[code]
+        out["assets"][j] = {"code": code, "status": c["status"], "issuer": c["issuer"], "events": c["events"][:6],
+                            "sold": sold, "sold_kind": events.KINDS[why.kind][0] if why else None,
+                            "sold_news": why.date if why else None, "sold_url": why.url if why else None}
+        if sold:
+            b.warnings.append(f"{b.labels[j]}: продан {sold} — {events.KINDS[why.kind][0]} (новость Мосбиржи {why.date})")
+    return out
 
 
 def today_book(b: Basket, p: Params) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -68,6 +109,8 @@ def run_study(req: dict) -> dict:
     t0 = time.time()
     specs, p, control, opts = parse(req)
     b = build(specs, opts["history_from"], opts["end"])
+    alive0 = b.alive.copy()
+    ev = apply_events(b, opts["events"])
     sig = signal(b, p)
     s0 = stats_start(b, sig, opts)
     days = b.dates[s0:]
@@ -100,6 +143,11 @@ def run_study(req: dict) -> dict:
                    "vs_hold": sizing.compare(x, xh, ppy),
                    "vs_base": sizing.compare(x, base.x[s0:], ppy) if base is not run else None},
     }
+    if ev["masked"]:  # the same book without the exits: what the filter changed
+        b0 = replace(b, alive=alive0)
+        x0 = simulate(b0, p, control, signal(b0, p)).x[s0:]
+        ev["with"], ev["without"] = perf(x, days, ppy), perf(x0, days, ppy)
+    out["meta"]["events"] = ev
     out["meta"]["elapsed"] = time.time() - t0
     return clean(out)
 

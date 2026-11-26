@@ -19,7 +19,7 @@ export interface Params { risk: number; lookbacks: number[]; slow: number; fast:
 
 export interface StudyRequest { assets: AssetSpec[]; params: Partial<Params>; control: number; period: string;
   start?: string; history_from?: string; money_share: number; windows?: [string, string, string, string][]; bootstrap_paths?: number;
-  cov?: string }
+  cov?: string; events?: "exit" | "mark" | "off" }
 
 export interface Perf { cagr: number; mean: number; vol: number; sharpe: number; dd: number; dd_from: string; dd_to: string;
   calmar: number; worst_day: number; worst_day_date: string; worst_month: number; worst_month_date: string;
@@ -39,7 +39,8 @@ export interface TailNumbers { xi: N; beta: N; u: N; pu: N; n: number; mean: num
 export interface StudyResult {
   meta: { assets: AssetInfo[]; warnings: string[]; params: Params; control: ControlDef; ppy: number; labels: string[];
     mode: "rule" | "portfolio"; bench: string;
-    period: { from: string; to: string; years: number; mode: string; calendar_from: string }; elapsed: number };
+    period: { from: string; to: string; years: number; mode: string; calendar_from: string }; elapsed: number;
+    events?: StudyEvents };
   overview: { assets: AssetRow[]; curves: Thin; corr: { labels: string[]; full: N[][]; last_year: N[][] } };
   rule: { book: Perf; hold: Perf; vs_hold_t: number; equity: Thin;
     years: { year: string; book: number; hold: N; assets: number[]; costs: number }[];
@@ -109,17 +110,39 @@ export interface MLLab {
 }
 export interface FactorRequest { start: string; top: number; cost: number }
 
+export type EventLevel = "exclude" | "warn";
+export interface ExchangeEvent {
+  id: number; date: string; kind: string; kind_title: string; level: EventLevel; scope: "issuer" | "security"; title: string;
+  issuer: string; security: string; codes: string[]; reason: string; effective: string; detail: string; url: string;
+}
+export interface EventCoverage { from: string | null; to: string | null; news: number; read: number; checked: number }
+export interface CodeCheck { code: string; status: "exclude" | "warn" | "ok"; issuer: string; name: string; events: ExchangeEvent[] }
+export interface StudyEvents {
+  mode: "exit" | "mark" | "off"; masked: boolean; coverage: EventCoverage | null;
+  assets: ({ code: string; status: CodeCheck["status"]; issuer: string; events: ExchangeEvent[]; sold: string | null;
+    sold_kind: string | null; sold_news: string | null; sold_url: string | null } | null)[];
+  with?: Perf; without?: Perf;
+}
+export interface PortfolioCheck {
+  key: string; title: string; source?: string; date?: string | null; error?: string; link?: string | null;
+  excluded?: number; warned?: number; excluded_weight?: number; drop?: string[];
+  positions: { code: string; name: string; weight: number; status: CodeCheck["status"]; issuer: string; events: ExchangeEvent[];
+    after: number }[];
+}
+export interface StopItem { code: string; reason: string; date: string }
+
 export type Choice = [string, string];
 export interface BookRequest {
   equity: string; bonds: string; trend: string; method: "risk" | "weights"; budget: [number, number, number];
-  target_vol: number; limit: number; control: number; cost: number; start: string;
+  target_vol: number; limit: number; control: number; cost: number; start: string; events?: boolean;
 }
 export interface BookRow {
   key: string; title: string; kind: "book" | "sleeve"; cagr: N; vol: N; sharpe: N; dd: N; dd_from: string; dd_to: string;
   worst_week: N; worst_4w: N; years: N; cut_weeks?: N; adjust_weeks?: N; binding?: N; worst_scenario?: N; cash_share?: N; turnover?: N;
 }
 export interface BookDecision {
-  date: string; kind: "rebalance" | "cut" | "adjust"; w: number[]; budget_w?: number[]; vol?: N; rc?: number[]; scenario: string;
+  date: string; kind: "rebalance" | "cut" | "adjust" | "event"; w: number[]; ticker?: string; name?: string; event?: string;
+  news?: string; url?: string; share?: number; budget_w?: number[]; vol?: N; rc?: number[]; scenario: string;
   loss_before: number; loss_after: number; cut: number[]; m: number; pos: number[]; betas?: number[]; picks?: string[]; added?: string[];
   removed?: string[]; next: N; until: string;
 }
@@ -129,6 +152,7 @@ export interface BookResult {
   meta: {
     opts: Omit<BookRequest, "budget"> & { budget: Record<string, number> }; from: string; to: string; weeks: number;
     panel_to: string; window: number; min_weeks: number; rebalance_cost: number; notes: string[]; control: string;
+    events_from: string | null; sales: number;
     choices: { equity: Choice[]; bonds: Choice[]; trend: Choice[]; controls: string[] }; sleeves: string[]; markets: string[];
   };
   rows: BookRow[];
@@ -142,7 +166,8 @@ export interface BookResult {
   log: BookDecision[];
   today: { date: string; w: number[]; budget: number[]; decided: string; latest: string; latest_kind: BookDecision["kind"];
     pos: number[]; scenarios: BookScenario[];
-    limit: number; picks: { ticker: string; name: string }[]; picked: string | null; betas: number[] };
+    limit: number; picks: { ticker: string; name: string; status: CodeCheck["status"]; sold: boolean; events: ExchangeEvent[] }[];
+    picked: string | null; betas: number[] };
   elapsed: number;
 }
 
@@ -169,6 +194,15 @@ export const api = {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
   ml: (req: FactorRequest) => call<MLLab>("/api/ml", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
+  eventsFeed: (days = 90, level?: EventLevel) => call<{ coverage: EventCoverage; events: ExchangeEvent[] }>(
+    `/api/events/feed?days=${days}${level ? `&level=${level}` : ""}`),
+  eventsCheck: (codes: string[]) => call<Record<string, CodeCheck>>("/api/events/check", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ codes }) }),
+  eventsPortfolios: () => call<{ coverage: EventCoverage; portfolios: PortfolioCheck[] }>("/api/events/portfolios"),
+  eventsUpdate: () => call<EventCoverage>("/api/events/update", { method: "POST" }),
+  stoplist: () => call<{ items: StopItem[] }>("/api/events/stoplist"),
+  saveStoplist: (items: StopItem[]) => call<{ items: StopItem[] }>("/api/events/stoplist", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) }),
   book: (req: BookRequest) => call<BookResult>("/api/book", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
 };

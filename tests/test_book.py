@@ -140,3 +140,27 @@ def test_top_fifth_and_composite():
                          "ep": np.array([np.nan, np.nan, np.nan, np.nan, 1.0])})
     c = book.composite(m)  # E/P is known for a fifth: left out; momentum and low volatility cancel
     assert np.allclose(c, 0.0)
+
+
+def test_equity_sleeve_sells_on_exchange_news():
+    """A share whose exchange news comes within the month is sold at the end of that week; its later crash does not
+    reach the sleeve, its money goes to the others; a share with an event in force is not picked."""
+    from ram import events, universe
+    W = 6
+    dates = [(date(2026, 8, 7) + timedelta(weeks=k)).isoformat() for k in range(W)]
+    R = np.zeros((W, 3))
+    R[3, 1] = -0.5  # B crashes in week 3, after its news in week 2
+    R[2, :] = 0.01
+    p = universe.Panel(dates=dates, tickers=["A", "B", "C"], names={}, P=np.ones((W, 3)), V=np.ones((W, 3)), R=R,
+                       D=np.zeros((W, 3)), covered=np.zeros(3, bool), notes=[])
+    m1 = factors.Month(t=0, u=4, cols=np.arange(3), fwd=np.zeros(3), f={})
+    m2 = factors.Month(t=4, u=5, cols=np.arange(3), fwd=np.zeros(3), f={})
+    e = events.Event(id=1, date=dates[1], kind="default", level="exclude", scope="issuer", title="t", codes=["B"])
+    exits = {"B": [(dates[1], "2030-01-01", e)]}
+    r, picks, sales = book.equity_sleeve(p, [m1, m2], "ew", 0.0, {}, exits)
+    assert [(s["week"], s["ticker"]) for s in sales] == [(2, "B")]  # news in [week 1, week 2): sold at the end of week 2
+    assert r[2] == pytest.approx(0.01)  # week 2 still holds B
+    assert r[3] == pytest.approx(0.0)  # B's crash in week 3 is not in the sleeve
+    assert picks[4] == ["A", "C"]  # out at the next formation too
+    raw, _, none = book.equity_sleeve(p, [m1, m2], "ew", 0.0, {}, None)
+    assert none == [] and raw[3] == pytest.approx(-0.5 / 3 * (1 / 1.01) * 1.01, rel=1e-6)

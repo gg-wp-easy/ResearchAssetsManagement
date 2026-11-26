@@ -39,7 +39,7 @@ import numpy as np
 from scipy.optimize import minimize
 from scipy.stats import rankdata
 
-from . import factors, ml, sizing, sources, universe
+from . import events, factors, ml, sizing, sources, universe
 from .allocation import shrunk_cov
 from .assets import AssetSpec, build, carry_rate, ffill_on
 from .factors import rank_z
@@ -78,6 +78,7 @@ class Opts:
     control: int = 0  # rule.CONTROLS, on the book's own drawdown
     cost: float = 0.002  # per side, the equity sleeve's share trades
     start: str = "2016-01-01"
+    events: bool = True  # the equity sleeve sells a share on an exchange event (events.py)
 
     @staticmethod
     def from_dict(d: dict) -> "Opts":
@@ -92,6 +93,8 @@ class Opts:
                 known[k] = float(known[k])
         if "control" in known:
             known["control"] = int(known["control"])
+        if "events" in known:
+            known["events"] = bool(known["events"])
         if "start" in known:
             known["start"] = date.fromisoformat(str(known["start"])[:10]).isoformat()
         o = Opts(**known)
@@ -136,6 +139,9 @@ class Data:
     names: dict[str, str]
     notes: list[str]
     panel_to: str
+    sales: dict[str, list[dict]] = None  # equity sleeve -> shares sold on exchange events
+    exits: dict = None  # ticker -> event spans (events.exits)
+    events_from: str | None = None  # the news the filter has seen start here
 
 
 _cache: dict[tuple, Data] = {}
@@ -158,12 +164,21 @@ def _build(p: universe.Panel, cost: float) -> Data:
     returns: dict[str, np.ndarray] = {}
     picks: dict[str, dict[int, list[str]]] = {}
     preds = ml.forecasts(p, months, UNIVERSE_START, TOP).get("price", {}).get("gbm", {}).get("preds", {})
+    try:
+        evs, cov = events.all_events()
+        exits = events.exits(evs)
+    except Exception as e:  # noqa: BLE001 - the exchange's news did not load: the sleeves without the filter
+        evs, cov, exits = [], {"from": None}, {}
+        notes.append(f"новости Мосбиржи не загрузились ({e}): отбор без фильтра событий")
+    sales: dict[str, list[dict]] = {}
     for key, _ in EQUITY:
         if key == "mcftr":
             returns["equity:mcftr"] = index_weekly(p.dates, "moex:index:MCFTR")
             continue
-        r, pk = equity_sleeve(p, months, key, cost, preds)
-        returns[f"equity:{key}"], picks[key] = r, pk
+        r, pk, sold = equity_sleeve(p, months, key, cost, preds, exits)
+        returns[f"equity:{key}"], picks[key], sales[key] = r, pk, sold
+        r, pk, _ = equity_sleeve(p, months, key, cost, preds, None)
+        returns[f"equity:{key}:raw"], picks[f"{key}:raw"] = r, pk
     returns["bonds:ofz"] = index_weekly(p.dates, "moex:index:RGBITR")
     returns["bonds:corp"] = corporate_weekly(p.dates)
     rate = carry_rate("rub", p.dates, notes)
@@ -179,7 +194,8 @@ def _build(p: universe.Panel, cost: float) -> Data:
     mkt = np.column_stack([returns["equity:mcftr"], returns["bonds:ofz"]])
     ends = [t for t in factors.month_ends(p.dates) if t < W - 1]  # the panel's last week is a month-end only by chance
     return Data(dates=p.dates, ends=ends, returns=returns, picks=picks, pos=pos, mkt=mkt,
-                scenarios=scen, names=dict(zip(p.tickers, p.names)), notes=notes, panel_to=p.dates[-1])
+                scenarios=scen, names=dict(p.names), notes=notes, panel_to=p.dates[-1],
+                sales=sales, exits=exits, events_from=cov.get("from"))
 
 
 def composite(m: factors.Month) -> np.ndarray | None:
@@ -204,21 +220,26 @@ def top_fifth(score: np.ndarray) -> np.ndarray:
 
 
 def equity_sleeve(p: universe.Panel, months: list[factors.Month], key: str, cost: float,
-                  preds: dict[int, list[float]]) -> tuple[np.ndarray, dict[int, list[str]]]:
+                  preds: dict[int, list[float]], exits: dict | None = None):
     """Weekly return of the equal-weight basket picked at each month-end, drifting until the next one; the first week
-    pays 2 x cost x the share of names replaced."""
+    pays 2 x cost x the share of names replaced. With `exits` (events.exits): a share with an exchange event in force
+    is not picked, and one whose news comes within the month is sold at the end of that week - its money spread over
+    the rest at 2 x cost. Returns (returns, picks, sales)."""
     r = np.full(len(p.dates), np.nan)
     picks: dict[int, list[str]] = {}
+    sales: list[dict] = []
     prev: set[str] | None = None
     for k, m in enumerate(months):
+        day = p.dates[m.t]
+        out = np.array([bool(exits) and events.excluded(exits.get(p.tickers[j]), day) is not None for j in m.cols])
         if key == "ew":
-            sel = np.arange(len(m.cols))
+            sel = np.flatnonzero(~out)
         else:
             score = composite(m) if key == "composite" else (np.array(preds[k]) if k in preds else None)
             if score is None:
                 prev = None
                 continue
-            sel = top_fifth(score)
+            sel = top_fifth(np.where(out, np.nan, score))
         cols = m.cols[sel]
         names = {p.tickers[j] for j in cols}
         turn = 1 - len(names & prev) / len(names) if prev else 1.0
@@ -228,9 +249,24 @@ def equity_sleeve(p: universe.Panel, months: list[factors.Month], key: str, cost
             rw = np.nan_to_num(p.R[w, cols])  # a share off the board: held at its last price, as the lab does
             r[w] = float(v @ (1 + rw) / v.sum() - 1)
             v = v * (1 + rw)
+            if exits:  # news during the week: sold at its end
+                for q, j in enumerate(cols):
+                    if v[q] <= 0:
+                        continue
+                    hit = next((e for a, _, e in exits.get(p.tickers[j], []) if p.dates[w - 1] <= a < p.dates[w]), None)
+                    if hit is None:
+                        continue
+                    total, freed = v.sum(), v[q]
+                    v[q] = 0.0
+                    if v.sum() > 0:
+                        v = v * total / v.sum()
+                    r[w] -= 2 * cost * freed / total
+                    prev.discard(p.tickers[j])
+                    sales.append({"week": w, "ticker": p.tickers[j], "share": float(freed / total), "kind": hit.kind,
+                                  "news": hit.date, "url": hit.url, "issuer": hit.issuer})
         r[m.t + 1] -= 2 * cost * turn
         picks[m.t] = sorted(names)
-    return r, picks
+    return r, picks, sales
 
 
 def index_weekly(dates: list[str], sid: str) -> np.ndarray:
@@ -341,10 +377,14 @@ class Book:
     picks: dict[int, list[str]]
 
 
+def equity_key(o: Opts) -> str:
+    return o.equity if o.events or o.equity == "mcftr" else f"{o.equity}:raw"
+
+
 def assemble(d: Data, o: Opts) -> Book:
-    keys = [f"equity:{o.equity}", f"bonds:{o.bonds}", f"trend:{o.trend}", "cash"]
+    keys = [f"equity:{equity_key(o)}", f"bonds:{o.bonds}", f"trend:{o.trend}", "cash"]
     return Book(o=o, keys=keys, R=np.column_stack([d.returns[k] for k in keys]), pos=d.pos[o.trend],
-                picks=d.picks.get(o.equity, {}))
+                picks=d.picks.get(equity_key(o), {}))
 
 
 def ready(bk: Book, t: int) -> np.ndarray:
@@ -471,6 +511,16 @@ def run(d: Data, o: Opts, t0: int | None = None, log: bool = False) -> dict:
            "binding": binding,
            "rebalances": sum(1 for t in range(t0, W) if t in ends or t == t0), "worst_after": worst_after[t0:]}
     if log:
+        if o.events and o.equity != "mcftr":
+            for sale in (d.sales or {}).get(o.equity, []):
+                w = sale["week"]
+                if t0 < w < W:
+                    rows.append({"date": d.dates[w], "kind": "event", "ticker": sale["ticker"],
+                                 "name": d.names.get(sale["ticker"], sale["ticker"]), "event": events.KINDS[sale["kind"]][0],
+                                 "news": sale["news"], "url": sale["url"], "share": sale["share"],
+                                 "w": held[w].tolist(), "pos": bk.pos[w].tolist(), "cut": [1.0, 1.0, 1.0], "m": 1.0,
+                                 "scenario": "", "loss_before": float(worst_after[w]), "loss_after": float(worst_after[w])})
+            rows.sort(key=lambda r: (r["date"], r["kind"] != "event"))
         _fill_returns(rows, d, x)
         out["log"] = rows
     return out
@@ -588,6 +638,8 @@ def report(req: dict) -> dict:
             variants.append(("guard", "тренд — основной с защитой", replace(o, trend="main_guard")))
     if o.control:
         variants.append(("no_control", "без контроля просадки", replace(o, control=0)))
+    if o.events and o.equity != "mcftr" and any(s_["week"] > t0 for s_ in (d.sales or {}).get(o.equity, [])):
+        variants.append(("no_events", "без фильтра событий Мосбиржи", replace(o, events=False)))
     variants.append(("6040", "60/40: MCFTR и ОФЗ, доли каждый месяц",
                      replace(o, equity="mcftr", bonds="ofz", method="weights", budget=(0.6, 0.4, 0.0), limit=0.0, control=0)))
     rows, curves, worst = [], {}, {}
@@ -635,6 +687,8 @@ def report(req: dict) -> dict:
     return {
         "meta": {"opts": o.as_dict(), "from": d.dates[t0], "to": days[-1], "weeks": len(days), "panel_to": d.panel_to,
                  "window": WINDOW, "min_weeks": MIN_WEEKS, "rebalance_cost": REBALANCE_COST, "notes": d.notes,
+                 "events_from": d.events_from,
+                 "sales": len([s_ for s_ in (d.sales or {}).get(o.equity, []) if s_["week"] > t0]) if o.events else 0,
                  "control": CONTROLS[o.control].name, "elapsed": 0.0,
                  "choices": {"equity": EQUITY, "bonds": BONDS, "trend": TRENDS,
                              "controls": [c.name for c in CONTROLS]},
@@ -678,7 +732,16 @@ def today_section(d: Data, o: Opts, main: dict) -> dict:
                      "sleeves": contrib[k].tolist(), "moves": scen.V[k].tolist()})
     rows.sort(key=lambda r: -r["loss"])
     form = max((k for k in bk.picks if k <= t), default=None)
-    picks = [{"ticker": tk, "name": d.names.get(tk, tk)} for tk in (bk.picks.get(form, []) if form is not None else [])]
+    tickers = bk.picks.get(form, []) if form is not None else []
+    try:
+        status = events.check(tickers) if tickers else {}
+    except Exception:  # noqa: BLE001
+        status = {}
+    sold_now = {s_["ticker"] for s_ in (d.sales or {}).get(o.equity, []) if form is not None and s_["week"] > form} \
+        if o.events else set()
+    picks = [{"ticker": tk, "name": d.names.get(tk, tk), "status": status.get(tk, {}).get("status", "ok"),
+              "sold": tk in sold_now,
+              "events": status.get(tk, {}).get("events", [])[:3]} for tk in tickers]
     latest = main["log"][-1]
     return {"date": d.dates[t], "w": w.tolist(), "budget": last["budget_w"], "decided": last["date"],
             "latest": latest["date"], "latest_kind": latest["kind"], "pos": bk.pos[t].tolist(),

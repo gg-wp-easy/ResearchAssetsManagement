@@ -16,11 +16,12 @@ export interface Settings {
   money_share: number;
   windows: [string, string, string, string][];
   cov: "shrunk" | "sample";
+  events: boolean;  // sell a MOEX share on the exchange's default / bankruptcy / delisting news
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   signal: "trend", cov: "shrunk", risk: 0.10, lookbacks: [20], fast: 20, cost: 0.0006, margin_cap: 0.5, control: 0, period: "common", start: "",
-  history_from: "", money_share: 0.5, windows: [],
+  history_from: "", money_share: 0.5, windows: [], events: true,
 };
 
 export const ASSET_DEFAULTS: Omit<AssetSpec, "id" | "label"> = {
@@ -52,6 +53,7 @@ export function request(assets: UIAsset[], s: Settings): StudyRequest {
     params: { risk: s.risk, lookbacks: s.lookbacks, fast: s.fast, cost: s.cost, margin_cap: s.margin_cap, signal: s.signal },
     control: s.control, period: s.period, start: s.start || undefined, history_from: s.history_from || undefined,
     money_share: s.money_share, windows: s.windows.length ? s.windows : undefined, cov: s.cov,
+    events: s.events ? "exit" : "mark",
   };
 }
 
