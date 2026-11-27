@@ -26,6 +26,7 @@ import numpy as np
 from . import book, events, sources, store, universe
 from .assets import carry_rate, ffill_on
 from .net import fetch_json
+from .presets import PRESETS
 
 FUTURES = ["CNYRUBF", "GLDRUBF", "IMOEXF", "RB"]  # the trend book's markets in book.MARKETS order
 FUTURE_TITLES = ["юань (вечный)", "золото в рублях (вечный)", "индекс МосБиржи (вечный)", "ОФЗ, индекс RGBI (квартальный)"]
@@ -712,6 +713,67 @@ def report(req: dict) -> dict:
         "settings": s.as_dict(), "rows": rows, "live": {k: v for k, v in live.items() if k not in ("x", "nav")},
         "series": series, "plan": pl, "wealth": w, "elapsed": time.time() - t_start,
     }
+
+
+PLAN_VERSION = 1
+SLEEVE_KEYS = ("equity", "bonds", "trend", "cash")
+
+
+def export(req: dict) -> dict:
+    """The plan for the trading bot (trade-t-bot reads the file, compares it with the broker account and shows the
+    orders in the app): today's weights of the book as shares of the whole capital - every picked share, the bond,
+    index and money-market funds, the futures' notionals - with today's lot sizes and prices. The bot turns the
+    weights into lots from the account's real value, so the plan does not depend on the capital set here."""
+    from datetime import UTC, datetime
+
+    from .study import clean
+
+    o = book.Opts.from_dict(req.get("opts") or {})
+    s = Settings.from_dict({**asdict(load_settings()), **(req.get("settings") or {})})
+    d = book.data(o.cost)
+    if d.fut_px is None:
+        raise ValueError("данные блоков собраны старой версией: перезапустите расчёт")
+    mk = market(d)
+    res = book.run(d, o, log=True)
+    pl = plan(d, o, mk, s, res)
+    today = book.today_section(d, o, res)
+    C = pl["capital"]
+    rows = []
+    for r in pl["rows"]:
+        if r["kind"] == "mmf":
+            continue
+        rows.append({"kind": r["kind"], "code": r["code"], "name": r["name"], "weight": r["target"] / C, "lot": r["lot"],
+                     "price": r["price"], "status": r.get("status", "ok"), "events": r.get("events", [])})
+    held = sum(r["weight"] for r in rows)
+    mmf = next(r for r in pl["rows"] if r["kind"] == "mmf")
+    rows.append({"kind": "mmf", "code": mmf["code"], "name": mmf["name"], "weight": max(0.0, 1 - held), "lot": mmf["lot"],
+                 "price": mmf["price"], "status": "ok", "events": []})
+    futures = [{"code": f["code"], "market": f["market"], "weight": f["target"] / C, "trend_weight": f["trend"] / C,
+                "value": f["value"], "margin_one": f["margin_one"]} for f in pl["futures"]]
+    h = res["held"][-1]
+    return clean({
+        "version": PLAN_VERSION, "made": datetime.now(UTC).isoformat(timespec="seconds"), "date": d.dates[-1],
+        "decided": today["decided"], "picked": today["picked"], "opts": o.as_dict(),
+        "funds": {"mmf": s.mmf, "bond": s.bond_fund, "index": s.index_fund}, "bonds_mode": s.bonds,
+        "weights": dict(zip(SLEEVE_KEYS, (float(x) for x in h))),
+        "trend": {"weight": float(h[2]), "risk": float(next(x for x in PRESETS if x["key"] == o.trend)["params"]["risk"]),
+                  "rule": o.trend},
+        "rows": rows, "futures": futures,
+        "worst": [{"label": x["label"], "loss": x["loss"]} for x in today["scenarios"][:3]], "limit": o.limit,
+    })
+
+
+def write_export(path, req: dict | None = None) -> dict:
+    """export() into `path` atomically (the bot may read it at any moment)."""
+    from pathlib import Path
+
+    out = export(req or {})
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(target)
+    return out
 
 
 def _ideal(res: dict, live: dict) -> dict:

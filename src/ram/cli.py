@@ -40,11 +40,12 @@ def main(argv: list[str] | None = None) -> int:
     bk.add_argument("--start", default="2016-01-01")
     ac = sub.add_parser("account", help="портфель из блоков на счёте Т-Банка: лоты, контракты, комиссии, налог, подушка")
     ac.add_argument("--limit", type=float, default=0.25, help="предел потерь в любом сценарии (0 — без предела)")
-    ac.add_argument("--trend", default="main", help="main | main_guard")
+    ac.add_argument("--trend", default="main_guard", help="main_guard (как бот с 2026-11-27) | main")
     ac.add_argument("--equity", default="composite", help="composite | gbm | ew | mcftr")
     ac.add_argument("--set", nargs="*", default=[], metavar="КЛЮЧ=ЗНАЧЕНИЕ",
                     help="настройки счёта на этот расчёт (money=200000 bonds=futures trend_exec=weekly ...)")
     ac.add_argument("--save", action="store_true", help="сохранить --set в data/user/account.json")
+    ac.add_argument("--export", metavar="ФАЙЛ", help="только записать план для бота (доли, лоты, цены) в JSON-файл")
     ev = sub.add_parser("events", help="события Мосбиржи: дефолты, банкротства, делистинг, сектор повышенного риска")
     ev.add_argument("--update", action="store_true", help="перечитать ленту новостей биржи сейчас")
     ev.add_argument("--since", help="дочитать ленту вглубь до даты (по умолчанию — два года)")
@@ -142,6 +143,14 @@ def main(argv: list[str] | None = None) -> int:
             over[k] = v if k in ("mmf", "bond_fund", "index_fund", "bonds", "trend_exec") else float(v)
         if a.save:
             account.save_settings({**account.load_settings().as_dict(), **over})
+        if a.export:
+            out = account.write_export(a.export, {"opts": {"limit": a.limit, "trend": a.trend, "equity": a.equity},
+                                                  "settings": over})
+            w = out["weights"]
+            print(f"План для бота: {a.export} на {out['date']} (решение {out['decided']}); акции {w['equity']:.0%}, "
+                  f"облигации {w['bonds']:.0%}, тренд {w['trend']:.0%}, деньги {w['cash']:.0%}; бумаг {len(out['rows'])}, "
+                  f"фьючерсов {len(out['futures'])}")
+            return 0
         res = account.report({"opts": {"limit": a.limit, "trend": a.trend, "equity": a.equity}, "settings": over})
         m, st, pl = res["meta"], res["settings"], res["plan"]
         print(f"Счёт {rub(st['capital'])} ₽ ({rub(st['money'])} на бумаги, {rub(st['futures_money'])} под фьючерсы), "

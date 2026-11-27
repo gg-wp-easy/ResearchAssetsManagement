@@ -9,7 +9,7 @@ import { EventLine, StatusTag } from "./eventsUi";
 
 const KEY = "ram.account.v1"; // the book's options of this page; the account's settings live on the server
 type Opts = Pick<BookRequest, "limit" | "trend" | "equity">;
-const OPTS: Opts = { limit: 0.25, trend: "main", equity: "composite" };
+const OPTS: Opts = { limit: 0.25, trend: "main_guard", equity: "composite" };  // the bot trades the protected rule since 2026-11-27
 const FUNDS = { mmf: ["LQDT", "SBMM", "AKMM", "TMON"], bond: ["SBGB", "TOFZ"], index: ["SBMX", "TMOS", "EQMX"] };
 const FX = ["USD", "EUR", "CNY"];
 const COSTS: [keyof AccountCosts, ReactNode][] = [
