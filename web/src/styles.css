@@ -302,6 +302,8 @@ tr.pick.sel td { background: var(--accent-soft); }
 td .swatch { margin-right: 0.4rem; vertical-align: -1px; }
 tr.over td { background: color-mix(in srgb, var(--neg) 10%, transparent); }
 ul.foot { padding-left: 1.2rem; margin-top: 0.2rem; }
+ul.todo { padding-left: 1.2rem; margin: 0.2rem 0 0.8rem; }
+ul.todo li { margin: 0.3rem 0; }
 .lab .grid2 { gap: 1rem; }
 @media (max-width: 860px) {
   .lab .grid2, .book-today { grid-template-columns: minmax(0, 1fr); }

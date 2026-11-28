@@ -412,14 +412,24 @@ def on_weeks(src_days: list[str], x: np.ndarray, days: list[str]) -> np.ndarray:
 
 def ensure(d: Data, o: Opts) -> None:
     """The own bonds' sleeve (bonds.py: the Bank of Russia's regime mix of floaters and short bonds) is built only when
-    asked for: its market takes half an hour to load the first time. "bonds:own" is before the coupon tax,
-    "bonds:own:tax" after it."""
-    if o.bonds != "own" or "bonds:own" in d.returns:
+    asked for: its market takes half an hour to load the first time."""
+    if o.bonds == "own":
+        bond_sleeve(d)
+
+
+def bond_sleeve(d: Data) -> None:
+    """bonds.build() once into `d`: "bonds:own" (before the coupon tax) and "bonds:own:tax", the currency bonds and the
+    currencies' cash in roubles ("fx:fx_cny", "fx:cash_usd", ...), the regime's mix and today's issues of every kind."""
+    if "bonds:own" in d.returns:
         return
     from . import bonds
     sl = bonds.build()
     d.returns["bonds:own"] = on_weeks(sl.dates, sl.returns["policy"], d.dates)
     d.returns["bonds:own:tax"] = on_weeks(sl.dates, sl.returns["policy:tax"], d.dates)
+    for k in [k for k, _ in bonds.FX_KINDS + bonds.FX_CASH]:
+        for suffix in ("", ":tax"):
+            if k + suffix in sl.returns:
+                d.returns[f"fx:{k}{suffix}"] = on_weeks(sl.dates, sl.returns[k + suffix], d.dates)
     d.bond_policy = {**sl.policy, "today": sl.today}
     d.notes.extend(n for n in sl.notes if n not in d.notes)
 

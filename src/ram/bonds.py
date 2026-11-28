@@ -11,6 +11,10 @@ Kinds of bonds, each with its job:
   the proxy is what the market showed then: a liquid issue, a G-spread over the КБД in the lower half of the market's
   and below 6%, a price above 85% of the face, an issuer never seen in the defaulted bonds' sector. Today the
   T-Invest broker risk 1 of server-analytic-system's list is required too.
+* fx_cny, fx_usd - bonds with a face in yuan or dollars (the Ministry of Finance's and the companies' replacement and
+  currency issues; liquid only from 2022): a sane yield in the currency, one issue an issuer, the most traded. Their
+  value is counted in the face's currency - ISS gives the accrued interest of many of them in roubles (the settlement
+  currency), so it is accrued here from the coupon schedule - and turned into roubles at the Bank of Russia's rate.
 
 At each month's end every kind is rebuilt: the eligible issues in equal shares (the ones held stay while still
 eligible; a corporate kind holds one issue an issuer). Week by week: the price (% of the face x the face) and the
@@ -23,7 +27,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from itertools import pairwise
 
@@ -63,6 +67,14 @@ MAX_OFZ = 12
 COST = {"ofz": 0.001, "corp": 0.002}  # one way: half the spread and the broker's 0.05%
 TAX = 0.13
 START = "2014-01-31"  # the КБД starts in January 2014: the corporate spreads are measured from it
+FX_KINDS = [("fx_cny", "Валютные в юанях (Минфин и компании)"), ("fx_usd", "Валютные в долларах (замещающие и Минфин)")]
+FX_UNITS = {"fx_cny": "CNY", "fx_usd": "USD"}
+FX_CASH = [("cash_cny", "Наличные юани (курс ЦБ)"), ("cash_usd", "Наличные доллары (курс ЦБ)")]
+FX_MIN_VALUE = 100_000.0  # a week on average: the market of currency bonds is thinner
+FX_MAX_YTM = 0.2  # a yield above it in a hard currency is a distressed issuer's
+FX_MAX = 12
+FX_MIN_ISSUES = 3  # a currency kind starts at the first month-end with this many eligible issues
+FX_COST = 0.003  # one way: the spread of a currency bond is wider
 
 
 def ofz_kind(secid: str) -> str | None:
@@ -274,16 +286,63 @@ def kind_rows(kind: str, m: bm.Market, d: Rows, groups: np.ndarray, base: np.nda
     return base[sel]
 
 
+def fx_accint(m: bm.Market, sched: dict[str, dict], units: set[int]) -> np.ndarray:
+    """m.accint with the bonds of `units` (indices into m.units) accrued in their face's currency from the coupon
+    schedule, linearly between the payment dates (the first period as long as the next one)."""
+    out = m.accint.copy()
+    ords = np.array([date.fromisoformat(x).toordinal() for x in m.dates])
+    bond_unit = np.full(len(m.secids), -1, np.int64)
+    bond_unit[m.sid] = m.unit
+    for s in np.flatnonzero(np.isin(bond_unit, list(units))):
+        lo, hi = np.searchsorted(m.sid, s, "left"), np.searchsorted(m.sid, s, "right")
+        cps = [(bm._ordinal(c[0]), c[1]) for c in (sched.get(m.secids[s]) or {}).get("coupons", [])]
+        out[lo:hi] = 0.0
+        if not cps:
+            continue
+        cd = np.array([c[0] for c in cps], np.int64)
+        known = [c[1] for c in cps if c[1] is not None]
+        if not known:
+            continue
+        last = known[-1]
+        cv = np.array([c[1] if c[1] is not None else last for c in cps], float)  # a floater's future coupon: the last one
+        first = cd[0] - (cd[1] - cd[0] if len(cd) > 1 else 182)
+        starts = np.r_[first, cd[:-1]]
+        day = ords[m.t[lo:hi]]
+        i = np.searchsorted(cd, day, side="right")  # the coupon being accrued
+        ok = i < len(cd)
+        j = np.minimum(i, len(cd) - 1)
+        span = np.maximum(cd[j] - starts[j], 1)
+        out[lo:hi] = np.where(ok, cv[j] * np.clip((day - starts[j]) / span, 0.0, 1.0), 0.0)
+    return out
+
+
+def fx_rows(m: bm.Market, d: Rows, rows: np.ndarray, unit: int, t: int, loose: bool = False) -> np.ndarray:
+    """The currency bonds of week t a currency kind may buy (or, `loose`, keep): an order-book board, the issuer never
+    in default so far, a sane yield in the currency, half a year (a quarter to keep) to the offer or maturity."""
+    sel = rows[(m.unit[rows] == unit) & d.order_ok[rows] & (d.defaulted_from[d.issuer[rows]] > t)]
+    if loose:
+        return sel[(m.price[sel] >= 80) & (d.life[sel] >= SELL_LIFE) & ~(m.ytm[sel] >= 1.5 * FX_MAX_YTM)]
+    return sel[(d.traded[sel] >= MIN_TRADED_WEEKS) & (d.value4[sel] >= 4 * FX_MIN_VALUE) & (m.price[sel] >= MIN_PRICE)
+               & (m.ytm[sel] > 0) & (m.ytm[sel] < FX_MAX_YTM) & (d.life[sel] >= BUY_LIFE)]
+
+
+def to_roubles(r: np.ndarray, rate: np.ndarray) -> np.ndarray:
+    """A weekly return in a currency and the currency's rate in roubles on the same weeks: the return in roubles."""
+    move = np.r_[np.nan, rate[1:] / rate[:-1] - 1]
+    return (1 + r) * (1 + move) - 1
+
+
 def pick(kind: str, m: bm.Market, d: Rows, cand: np.ndarray, held: list[int], keep: np.ndarray, t: int,
          margin: np.ndarray) -> list[int]:
     """Bond indices for `kind` at week t: the held ones still allowed (`keep`: rows with the sell-side life), then new
     ones - OFZ the most liquid, fixed-coupon corporates the widest spread of the safe set, floaters the widest margin;
     one issue an issuer."""
     corp = kind.startswith("corp")
-    most = MAX_CORP if corp else MAX_OFZ
+    one_each = corp or kind.startswith("fx")
+    most = MAX_CORP if corp else FX_MAX if kind.startswith("fx") else MAX_OFZ
     keep_s = {int(m.sid[r]) for r in keep}
     out = [s for s in held if s in keep_s][:most]
-    issuers = {int(d.issuer[m.at(s, t)]) for s in out} if corp else set()
+    issuers = {int(d.issuer[m.at(s, t)]) for s in out} if one_each else set()
     score = d.value4[cand] if not corp else d.spread[cand] if kind == "corp_fixed" else margin[cand]
     order = cand[np.argsort(-np.nan_to_num(score), kind="stable")]
     for r in order:
@@ -292,7 +351,7 @@ def pick(kind: str, m: bm.Market, d: Rows, cand: np.ndarray, held: list[int], ke
         s = int(m.sid[r])
         if s in out:
             continue
-        if corp:
+        if one_each:
             i = int(d.issuer[r])
             if i in issuers:
                 continue
@@ -413,9 +472,13 @@ def build(tax: float = TAX, progress=None) -> Sleeve:
     corp_ix = np.array([(meta.get(s) or {}).get("type") in CORP_TYPES for s in m.secids])
     # schedules: every OFZ and every ruble corporate liquid enough at some month-end
     want: set[int] = {j for j, s in enumerate(m.secids) if ofz_kind(s)}
+    fx_units = {k: m.units.index(u) for k, u in FX_UNITS.items() if u in m.units}
     for t in ends:
-        base = _eligible_base(m, d, bm.cross_section(m, t), t)
+        rows = bm.cross_section(m, t)
+        base = _eligible_base(m, d, rows, t)
         want |= {int(s) for s in m.sid[base] if corp_ix[s]}
+        for u in fx_units.values():
+            want |= {int(s) for s in m.sid[fx_rows(m, d, rows, u, t)]}
     sched = bm.schedules([m.secids[j] for j in sorted(want)], progress)
     apply_offers(m, d, sched)
     groups = np.array(classify(m, meta, sched), dtype=object)
@@ -426,7 +489,7 @@ def build(tax: float = TAX, progress=None) -> Sleeve:
     rate = carry_rate("rub", m.dates, notes)
     ords = np.array([date.fromisoformat(x).toordinal() for x in m.dates])
     cash_w = np.r_[np.nan, rate[:-1] * np.diff(ords) / 365]
-    picks: dict[str, dict[int, list[int]]] = {k: {} for k, _ in KINDS}
+    picks: dict[str, dict[int, list[int]]] = {k: {} for k, _ in KINDS + FX_KINDS}
     for t in ends:
         rows = bm.cross_section(m, t)
         base = _eligible_base(m, d, rows, t)
@@ -443,6 +506,7 @@ def build(tax: float = TAX, progress=None) -> Sleeve:
         c = COST["corp" if kind.startswith("corp") else "ofz"]
         returns[kind] = simulate(m, picks[kind], sched, cash_w, 0.0, c)
         returns[f"{kind}:tax"] = simulate(m, picks[kind], sched, cash_w, tax, c)
+    mfx = currency_kinds(m, d, sched, ends, fx_units, picks, returns, tax, margin, notes)
     for key, _, mix in MIXES:
         for suffix in ("", ":tax"):
             returns[key + suffix] = blend({k: returns[k + suffix] for k in mix}, mix)
@@ -460,12 +524,54 @@ def build(tax: float = TAX, progress=None) -> Sleeve:
     except Exception as e:  # noqa: BLE001
         notes.append(f"индексы корпоративных облигаций не загрузились: {e}")
     today = {kind: describe(m, d, picks[kind].get(T - 1, []), T - 1, groups, margin) for kind, _ in KINDS}
+    for kind, _ in FX_KINDS:  # the G-spread is over the rouble curve: none for a currency bond
+        today[kind] = [{**b, "spread": None, "group": kind} for b in describe(mfx, d, picks[kind].get(T - 1, []), T - 1,
+                                                                             groups, margin)]
     policy = policy_mixes(m.dates, ends, returns, notes)
     policy["issues"] = issues(policy["mix"], today)
     policy["plan"] = plan_issues(policy["mix"], today)
     notes.append(f"рынок облигаций: {len(m.dates)} недель с {m.dates[0]}, {len(m.secids)} выпусков; "
                  f"графики выплат — {len(sched)}; {time.time() - t0:.0f} с")
     return Sleeve(dates=m.dates, returns=returns, held=picks, notes=notes, today=today, policy=policy)
+
+
+def currency_kinds(m: bm.Market, d: Rows, sched: dict[str, dict], ends: list[int], fx_units: dict[str, int],
+                   picks: dict[str, dict[int, list[int]]], returns: dict[str, np.ndarray], tax: float, margin: np.ndarray,
+                   notes: list[str]) -> bm.Market:
+    """The currency kinds into `picks` and `returns` (in roubles; ":own" - in the face's currency) and the cash of
+    their currencies ("cash_cny", "cash_usd": the Bank of Russia's rate); the market with the accrued interest of the
+    currency bonds in their face's currency."""
+    T = len(m.dates)
+    mfx = replace(m, accint=fx_accint(m, sched, set(fx_units.values())))
+    zero = np.zeros(T)
+    for (kind, _), (cash_key, _) in zip(FX_KINDS, FX_CASH):
+        code = FX_UNITS[kind]
+        try:
+            c = sources.load(f"cbr:{code}")
+        except Exception as e:  # noqa: BLE001 - no rate: no currency kind
+            notes.append(f"курс {code} ЦБ не загрузился ({e}): без валютных облигаций в {code}")
+            continue
+        rate = ffill_on(c.dates, c.values, m.dates)
+        move = np.r_[np.nan, rate[1:] / rate[:-1] - 1]
+        returns[cash_key] = returns[f"{cash_key}:tax"] = move
+        u = fx_units.get(kind)
+        if u is None:
+            continue
+        started = False
+        for t in ends:
+            rows = bm.cross_section(m, t)
+            cand = fx_rows(m, d, rows, u, t)
+            if not started and len({int(d.issuer[r]) for r in cand}) < FX_MIN_ISSUES:
+                continue
+            started = True
+            keep = fx_rows(m, d, rows, u, t, loose=True)
+            prev = [p for tt, p in picks[kind].items() if tt < t]
+            picks[kind][t] = pick(kind, m, d, cand, prev[-1] if prev else [], keep, t, margin)
+        own = simulate(mfx, picks[kind], sched, zero, 0.0, FX_COST)
+        returns[f"{kind}:own"] = own
+        returns[kind] = to_roubles(own, rate)
+        returns[f"{kind}:tax"] = to_roubles(simulate(mfx, picks[kind], sched, zero, tax, FX_COST), rate)
+    return mfx
 
 
 POLICY_ROWS = [("base", "База: корпоративные флоатеры 50%, короткие ОФЗ и корпоративные по 25%"),
@@ -586,9 +692,11 @@ def report(tax: float = TAX, start: str = START, progress=None) -> dict:
     i0 = next(i for i, d in enumerate(days) if d >= start)
     recent = date.fromisoformat(days[-1]).replace(year=date.fromisoformat(days[-1]).year - RECENT).isoformat()
     j0 = next(i for i, d in enumerate(days) if d >= recent)
-    titles = {**KIND_TITLES, **{k: t for k, t, _ in MIXES}, **dict(POLICY_ROWS), **dict(BENCHMARKS)}
+    titles = {**KIND_TITLES, **{k: t for k, t, _ in MIXES}, **dict(POLICY_ROWS), **dict(BENCHMARKS), **dict(FX_KINDS),
+              **dict(FX_CASH)}
     rows = []
-    for key in [k for k, _ in KINDS] + [k for k, _, _ in MIXES] + [k for k, _ in POLICY_ROWS] + [k for k, _ in BENCHMARKS]:
+    for key in ([k for k, _ in KINDS] + [k for k, _, _ in MIXES] + [k for k, _ in POLICY_ROWS] + [k for k, _ in BENCHMARKS]
+                + [k for k, _ in FX_KINDS] + [k for k, _ in FX_CASH]):
         x = sl.returns.get(key)
         if x is None:
             continue

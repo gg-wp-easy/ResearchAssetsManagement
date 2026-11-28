@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, account, bonds, book, events, factors, ml, sas, sources, watch
+from . import __version__, account, bonds, book, capital, events, factors, ml, sas, sources, watch
 from .net import NotFound
 from .presets import PRESETS
 from .rule import CONTROLS, Params
@@ -191,6 +191,25 @@ def account_report(req: dict) -> dict:
     with _factor_lock:
         try:
             res = clean(account.report(req))
+        except NotFound as e:
+            raise HTTPException(404, str(e)) from e
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(400, str(e)) from e
+    return _remember(key, res)
+
+
+@app.post("/api/capital")
+def capital_report(req: dict) -> dict:
+    """The whole capital (capital.py): the account's book, gold, currency and real-estate funds; plans of their shares."""
+    s = account.load_settings()
+    key = "capital:" + json.dumps({"req": req, "s": s.as_dict()}, sort_keys=True, ensure_ascii=False)
+    with _lock:
+        if key in _results:
+            _results.move_to_end(key)
+            return _results[key]
+    with _factor_lock:
+        try:
+            res = clean(capital.report(req))
         except NotFound as e:
             raise HTTPException(404, str(e)) from e
         except (ValueError, KeyError, TypeError) as e:

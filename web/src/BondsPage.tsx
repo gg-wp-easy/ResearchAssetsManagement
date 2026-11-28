@@ -10,8 +10,9 @@ const KINDS = ["ofz_short", "ofz_long", "ofz_ladder", "ofz_float", "ofz_linker",
 const MIXES = ["near_cash", "ladder", "ofz3", "mixed"];
 const BENCH = ["RGBITR", "RUCB", "SBGB", "cash"];
 const POLICY = ["base", "policy_rule", "policy"];
+const FX = ["fx_cny", "fx_usd", "cash_cny", "cash_usd"];
 const GROUPS: [string, string[]][] = [["Виды облигаций", KINDS], ["Смеси видов", MIXES], ["По режиму ЦБ", POLICY],
-  ["Для сравнения", BENCH]];
+  ["Для сравнения", BENCH], ["Валютные и наличная валюта, в рублях", FX]];
 const REGIMES: Record<string, string> = { tight: "ужесточение", hold: "пауза", ease: "смягчение" };
 
 export function BondsPage() {
@@ -177,7 +178,8 @@ const SHORT: Record<string, string> = {
   ofz_short: "ОФЗ коротк.", ofz_long: "ОФЗ длин.", ofz_ladder: "лестница", ofz_float: "ОФЗ-ПК", ofz_linker: "ОФЗ-ИН",
   corp_fixed: "корп.", corp_float: "корп. флоат.", near_cash: "смесь: почти деньги", ladder: "смесь: лестница",
   base: "база", policy_rule: "ЦБ: заранее", policy: "ЦБ: оптимум", ofz3: "смесь: ОФЗ×3", mixed: "смесь: с корп.",
-  RGBITR: "RGBITR", RUCB: "RUCB", SBGB: "SBGB", cash: "RUONIA",
+  RGBITR: "RGBITR", RUCB: "RUCB", SBGB: "SBGB", cash: "RUONIA", fx_cny: "в юанях", fx_usd: "в долларах",
+  cash_cny: "юани", cash_usd: "доллары",
 };
 
 function Today({ r }: { r: BondsResult }) {
@@ -189,7 +191,7 @@ function Today({ r }: { r: BondsResult }) {
       <div className="lab-controls">
         <label className="field"><span>Вид</span>
           <select value={kind} onChange={(e) => setKind(e.target.value)}>
-            {KINDS.map((k) => <option key={k} value={k}>{r.titles[k]} — {r.today[k]?.length ?? 0}</option>)}
+            {[...KINDS, "fx_cny", "fx_usd"].map((k) => <option key={k} value={k}>{r.titles[k]} — {r.today[k]?.length ?? 0}</option>)}
           </select>
         </label>
       </div>

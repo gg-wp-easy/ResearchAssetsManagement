@@ -47,6 +47,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="настройки счёта на этот расчёт (money=200000 bonds=futures trend_exec=weekly ...)")
     ac.add_argument("--save", action="store_true", help="сохранить --set в data/user/account.json")
     ac.add_argument("--export", metavar="ФАЙЛ", help="только записать план для бота (доли, лоты, цены) в JSON-файл")
+    ca = sub.add_parser("capital", help="весь капитал: счёт, золото, валюта, фонды недвижимости; планы долей")
+    ca.add_argument("--limit", type=float, default=0.25, help="предел потерь портфеля из блоков в любом сценарии")
+    ca.add_argument("--trend", default="main_guard", help="main_guard | main")
+    ca.add_argument("--equity", default="composite", help="composite | gbm | ew | mcftr")
+    ca.add_argument("--bonds", default="own", help="own | ofz | corp")
+    ca.add_argument("--set", nargs="*", default=[], metavar="КЛЮЧ=ЗНАЧЕНИЕ",
+                    help="золото и валюта на этот расчёт: gold_grams=100 USD=3000 CNY=20000")
     ev = sub.add_parser("events", help="события Мосбиржи: дефолты, банкротства, делистинг, сектор повышенного риска")
     ev.add_argument("--update", action="store_true", help="перечитать ленту новостей биржи сейчас")
     ev.add_argument("--since", help="дочитать ленту вглубь до даты (по умолчанию — два года)")
@@ -145,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         over = {}
         for kv in a.set:
             k, _, v = kv.partition("=")
-            over[k] = v if k in ("mmf", "bond_fund", "index_fund", "bonds", "trend_exec") else float(v)
+            over[k] = v if k in ("mmf", "bond_fund", "index_fund", "bonds", "trend_exec", "capital_plan") else float(v)
         if a.save:
             account.save_settings({**account.load_settings().as_dict(), **over})
         if a.export:
@@ -187,6 +194,54 @@ def main(argv: list[str] | None = None) -> int:
             for s_ in w["scenarios"][:5]:
                 print(f"    {s_['label'][:46]:46} счёт {rub(s_['account'], True):>12}  вне счёта {rub(s_['total'] - s_['account'], True):>12}"
                       f"  всего {s_['share']:+.1%}")
+        return 0
+    if a.cmd == "capital":
+        from . import account, capital
+        over: dict = {}
+        fx = dict(account.load_settings().fx)
+        for kv in a.set:
+            k, _, v = kv.partition("=")
+            if k.upper() in account.FX_CODES:
+                fx[k.upper()] = float(v)
+            else:
+                over[k] = float(v)
+        over["fx"] = fx
+        res = capital.report({"opts": {"limit": a.limit, "trend": a.trend, "equity": a.equity, "bonds": a.bonds},
+                              "settings": over})
+        t = res["titles"]
+        print(f"Весь капитал на {res['date']}: {res['total']:,.0f} ₽ — "
+              + ", ".join(f"{t[k]} {res['shares'].get(k, 0):.0%}" for k in res["keys"]))
+        g = res["regime"]
+        print(f"Режим ЦБ: «{g['title']}» с {g['since']}, ключевая {g['key']:.2%}; бюджет риска по режиму — "
+              + ", ".join(f"{t[k]} {v:.0%}" for k, v in g["budget"].items()))
+        print(f"\nПланы с {res['start']} (до налогов)   {'в год':>7}{'вол.':>7}{'Шарп':>6}{'просадка':>9}{'сделок/г':>9}"
+              f"{'худший сц.':>11}   доли сегодня")
+        for p in res["plans"]:
+            st = p["stats"]
+            print(f"  {p['title'][:32]:32}{st['cagr']:7.1%}{st['vol']:7.1%}{st['sharpe']:6.2f}{st['dd']:9.1%}"
+                  f"{p['trades_year']:9.1f}{p['worst_loss']:11.1%}   "
+                  + ", ".join(f"{t[k]} {v:.0%}" for k, v in p["today"].items() if v > 0.005))
+        print("\nКлассы на тех же неделях:")
+        for c in res["classes"]:
+            st = c["stats"]
+            if st:
+                print(f"  {c['title'][:32]:32}{st['cagr']:7.1%}{st['vol']:7.1%}{st['sharpe']:6.2f}{st['dd']:9.1%}")
+        print("\nГоды: " + "  ".join(p["key"] for p in res["plans"]))
+        for y in res["years"]:
+            print(f"  {y['year']} " + "  ".join(f"{y.get(p['key'], float('nan')):+7.1%}" for p in res["plans"]))
+        main = res["main"]
+        print(f"\nЧто сделать руками по плану «{next(p['title'] for p in res['plans'] if p['key'] == main)}»:")
+        for x in res["actions"].get(main, []):
+            print("  •", x["text"])
+        mk = res["markets"]
+        for p in res["plans"]:
+            print(f"  {p['title'][:32]:32} рынки: " + ", ".join(f"{mk[k]} {v:+.0%}" for k, v in p["exposure"].items()))
+        print(f"\nВалюта с {res['currency']['from']}: наличными или облигациями (в рублях)")
+        for x in res["currency"]["rows"]:
+            st = x["stats"]
+            print(f"  {x['title'][:44]:44}{st['cagr']:7.1%}{st['vol']:7.1%}{st['dd']:9.1%}")
+        for n in res["notes"]:
+            print("•", n)
         return 0
     if a.cmd == "events":
         from . import events

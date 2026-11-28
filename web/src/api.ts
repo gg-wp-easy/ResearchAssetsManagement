@@ -190,7 +190,7 @@ export interface AccountSettings {
   money: number; futures_money: number; fee: number; fee_fut: number; fee_month: number; tax: number;
   slip_stock: number; slip_fut: number; slip_fund: number; mmf: string; bond_fund: string; index_fund: string;
   bonds: "fund" | "futures"; trend_exec: "daily" | "weekly"; gold_grams: number; gold_haircut: number;
-  fx: Record<string, number>; fx_haircut: number; funds: AccountFund[]; capital?: number;
+  fx: Record<string, number>; fx_haircut: number; funds: AccountFund[]; capital_plan: string; capital?: number;
 }
 export interface AccountCosts { stocks: number; funds: number; futures: number; fixed: number; drag: number; div_tax: number; income_tax: number }
 export interface AccountRow {
@@ -199,9 +199,10 @@ export interface AccountRow {
   margin_mean?: number; margin_max?: number; trades_year?: number; final_tax?: number; end?: number; end_after_tax?: number;
 }
 export interface PlanRow {
-  kind: "share" | "bond" | "mmf" | "index" | "bond_issue"; code: string; name: string; lot: number; price: number; lots: number;
-  units: number; value: number; target: number; spread: N; status?: "exclude" | "warn" | "ok"; events?: ExchangeEvent[];
-  accint?: number; face?: number; price_pct?: number; bond_kind?: string; ytm?: N; duration?: N;
+  kind: "share" | "bond" | "mmf" | "index" | "bond_issue" | "gold" | "fx_bond"; code: string; name: string; lot: number;
+  price: number; lots: number; units: number; value: number; target: number; spread: N; status?: "exclude" | "warn" | "ok";
+  events?: ExchangeEvent[]; accint?: number; face?: number; price_pct?: number; bond_kind?: string; ytm?: N; duration?: N;
+  currency?: string; price_rub?: number;
 }
 export interface BondPolicy { regime: string; title: string; since: string; key: N; mix: Record<string, number> }
 export interface PlanFuture {
@@ -210,7 +211,8 @@ export interface PlanFuture {
 }
 export interface AccountPlan {
   date: string; weights: number[]; capital: number; rows: PlanRow[]; futures: PlanFuture[]; margin: number; futures_money: number;
-  bond_policy?: BondPolicy | null;
+  bond_policy?: BondPolicy | null; account: number; on_account: Record<string, number>;
+  capital_plan: { plan: string; title: string; shares: Record<string, number>; outside: Record<string, number> } | null;
   margin_share: number; entry_cost: number; rounding: number; off: number;
 }
 export interface WealthItem { kind: "account" | "gold" | "fx" | "fund"; label: string; value: number; sale: number; share: number; detail?: string; code?: string }
@@ -251,6 +253,29 @@ export interface BondsResult { date: string; start: string; recent_from: string;
   params: { buy_life: number; sell_life: number; min_value: number; spread_cap: number; float_margin: number; max_corp: number;
     max_ofz: number; cost: Record<string, number> } }
 
+// ---------------------------------------------------------------------------- the whole capital (capital.py)
+export type CapitalClass = "book" | "gold" | "fx" | "realty";
+export interface CapitalScenario { label: string; kind: "hyp" | "hist"; to: string; loss: number; classes: Record<string, number>; moves: number[] }
+export interface CapitalPlan {
+  key: string; title: string; stats: Partial<BondStats>; trades_year: number; mean: Record<string, number>;
+  today: Record<string, number>; worst: CapitalScenario[]; worst_loss: number; exposure: Record<string, number>;
+}
+export interface CapitalHolding { cls: CapitalClass; label: string; value: number; sale: number; share: number; detail?: string; code?: string }
+export interface CapitalAction { cls: CapitalClass; rub: number; text: string }
+export interface CapitalResult {
+  date: string; start: string; keys: CapitalClass[]; titles: Record<string, string>; plans: CapitalPlan[]; main: string;
+  classes: { key: CapitalClass; title: string; from: string | null; stats: Partial<BondStats> }[];
+  years: ({ year: string } & Record<string, number | string>)[]; curves: { dates: string[]; series: Record<string, N[]> };
+  holdings: CapitalHolding[]; total: number; shares: Record<string, number>; actions: Record<string, CapitalAction[]>;
+  markets: Record<string, string>;
+  regime: { regime: string; title: string; since: string; key: N; budget: Record<string, number> };
+  budgets: Record<string, Record<string, number>>;
+  currency: { from: string; rows: { key: string; title: string; stats: Partial<BondStats>; tax: Partial<BondStats> | null }[] };
+  fx_issues: BondIssue[]; limit: number; notes: string[];
+  params: { band: number; cost: number; fx_mix: Record<string, number>; realty_budget: number; window: number; min_weeks: number };
+  elapsed: number;
+}
+
 export const api = {
   meta: () => call<Meta>("/api/meta"),
   search: (q: string, signal?: AbortSignal) => call<SearchHit[]>(`/api/search?q=${encodeURIComponent(q)}`, { signal }),
@@ -275,6 +300,8 @@ export const api = {
   book: (req: BookRequest) => call<BookResult>("/api/book", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
   account: (opts: Partial<BookRequest>) => call<AccountResult>("/api/account", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ opts }) }),
+  capital: (opts: Partial<BookRequest>) => call<CapitalResult>("/api/capital", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ opts }) }),
   accountSettings: () => call<AccountSettings>("/api/account/settings"),
   saveAccountSettings: (s: AccountSettings) => call<AccountSettings>("/api/account/settings", {

@@ -36,6 +36,7 @@ FUND_INDEX = {"mmf": "cash", "bond": "moex:index:RGBITR", "index": "moex:index:M
 DRAG_YEARS = 4  # the funds' lag behind their index: measured over the last years
 ROLL_DAYS = 7  # the RB contract: the nearest with at least this many days left, as the bot rolls
 FX_CODES = ("USD", "EUR", "CNY", "GBP", "CHF", "JPY", "HKD", "AED", "KZT", "TRY", "INR")
+CAPITAL_PLANS = ("book", "now", "risk", "regime")  # = capital.PLANS
 FUND_BETA_FALLBACK = (0.4, 0.2)  # a real-estate fund with less than half a year of prices: assumed betas (MCFTR, OFZ)
 WEEKS = book.WEEKS
 ISS_TQBR = ("https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities.json?iss.meta=off"
@@ -71,6 +72,7 @@ class Settings:
     fx: dict[str, float] = field(default_factory=lambda: {"USD": 0.0, "EUR": 0.0, "CNY": 0.0})
     fx_haircut: float = 0.01
     funds: list[dict] = field(default_factory=list)  # real-estate funds: {"secid", "units", "payout"}
+    capital_plan: str = "risk"  # the whole capital's plan (capital.PLANS) the account and the bot's plan follow
 
     @property
     def capital(self) -> float:
@@ -91,6 +93,8 @@ class Settings:
                 raise ValueError("комиссии и спред - от 0 до 2% за сделку")
         if not 0 <= s.fee_month <= 100_000 or not 0 <= s.tax <= 0.3:
             raise ValueError("плата за тариф - от 0 до 100 000 ₽ в месяц, налог - от 0 до 30%")
+        if s.capital_plan not in CAPITAL_PLANS:
+            raise ValueError(f"план всего капитала: один из {', '.join(CAPITAL_PLANS)}")
         if s.bonds not in ("fund", "futures") or s.trend_exec not in ("daily", "weekly"):
             raise ValueError("облигации: fund | futures; тренд: daily | weekly")
         for k, choices in (("mmf", FUND_CHOICES["mmf"]), ("bond_fund", FUND_CHOICES["bond"]),
@@ -512,9 +516,41 @@ def money_only(d: book.Data, t0: int, s: Settings, capital: float, drag: float) 
 # ---------------------------------------------------------------------------- the plan for today
 
 
-def plan(d: book.Data, o: book.Opts, mk: Market, s: Settings, res: dict) -> dict:
-    """What to hold today for the account's money: the picks in lots, the funds in units, the futures in contracts."""
-    C = s.capital
+def on_account(cap: dict | None, C: float) -> dict[str, float]:
+    """Roubles of the exchange gold and the currency bonds the account holds for the whole capital's plan: the plan's
+    share of the whole capital (the broker capital C and the wealth outside it) less what the bars and the cash already
+    hold; at most the account's money."""
+    if not cap:
+        return {"gold": 0.0, "fx": 0.0}
+    out_ = cap.get("outside", {})
+    total = C + sum(out_.values())
+    want = {c: max(0.0, cap["shares"].get(c, 0.0) * total - out_.get(c, 0.0)) for c in ("gold", "fx")}
+    s = sum(want.values())
+    return {c: v * min(1.0, C / s) for c, v in want.items()} if s > 0 else want
+
+
+def capital_rows(cap: dict, amounts: dict[str, float]) -> list[dict]:
+    """The exchange gold and the currency bonds for `amounts` (roubles of each class), in whole grams and bonds; the
+    price of a currency bond in roubles at the Bank of Russia's rate (its clean price and accrued interest are in the
+    face's currency)."""
+    out = []
+    for r in cap["rows"]:
+        cls = "gold" if r["kind"] == "gold" else "fx"
+        target = amounts[cls] * r["weight"]
+        rate = cap["rates"].get(r.get("currency", "RUB"), 1.0)
+        unit = (r["price"] + r.get("accint", 0.0)) * rate
+        lots = int(np.round(target / (unit * r["lot"]))) if unit > 0 else 0
+        out.append({**r, "lots": lots, "units": lots * r["lot"], "value": lots * r["lot"] * unit, "target": target,
+                    "spread": None, "price_rub": unit})
+    return out
+
+
+def plan(d: book.Data, o: book.Opts, mk: Market, s: Settings, res: dict, cap: dict | None = None) -> dict:
+    """What to hold today for the account's money: the picks in lots, the funds in units, the futures in contracts;
+    with the whole capital's plan (`cap`, capital.plan_section) the exchange gold and the currency bonds first and the
+    book on the rest."""
+    acc = on_account(cap, s.capital)
+    C = s.capital - sum(acc.values())  # the book's capital
     t = len(d.dates) - 1
     h = res["held"][-1]
     rows: list[dict] = []
@@ -551,30 +587,35 @@ def plan(d: book.Data, o: book.Opts, mk: Market, s: Settings, res: dict) -> dict
         fut.append({"kind": "future", "code": sp["secid"], "market": FUTURE_TITLES[i], "contracts": k,
                     "notional": k * sp["value"], "target": float(target[i]), "trend": float(trend_part[i]),
                     "value": sp["value"], "margin": abs(k) * sp["margin"], "margin_one": sp["margin"]})
+    if cap:
+        rows.extend(capital_rows(cap, acc))
     spent = sum(r["value"] for r in rows)
-    mmf = _fund_row(mk, s.mmf, "mmf", C - spent)
+    mmf = _fund_row(mk, s.mmf, "mmf", s.capital - spent)
     rows.append(mmf)
     status = {}
-    checked = names + [r["code"] for r in rows if r["kind"] == "bond_issue"]
+    checked = names + [r["code"] for r in rows if r["kind"] in ("bond_issue", "fx_bond")]
     if checked:
         try:
             status = events.check(checked)
         except Exception:  # noqa: BLE001 - the exchange's news did not load
             status = {}
     for r in rows:
-        if r["kind"] in ("share", "bond_issue"):
+        if r["kind"] in ("share", "bond_issue", "fx_bond"):
             st = status.get(r["code"], {})
             r["status"] = st.get("status", "ok")
             r["events"] = st.get("events", [])[:2]
     margin = sum(f["margin"] for f in fut)
-    stocks_value = sum(r["value"] for r in rows if r["kind"] in ("share", "bond_issue"))  # an exchange spread, not a fund's
+    stocks_value = sum(r["value"] for r in rows if r["kind"] in ("share", "bond_issue", "fx_bond", "gold"))  # an exchange spread
     devs = [abs(r["value"] - r["target"]) for r in rows if r["kind"] == "share"]
     pol = d.bond_policy if o.bonds == "own" else None
-    return {"date": d.dates[t], "weights": h.tolist(), "capital": C, "rows": rows, "futures": fut,
+    return {"date": d.dates[t], "weights": h.tolist(), "capital": C, "account": s.capital, "on_account": acc,
+            "capital_plan": {k: cap[k] for k in ("plan", "title", "shares", "outside")} if cap else None,
+            "rows": rows, "futures": fut,
             "bond_policy": {k: pol[k] for k in ("regime", "title", "since", "key", "mix")} if pol else None,
             "margin": margin, "futures_money": s.futures_money, "margin_share": margin / C,
             "entry_cost": (s.fee + s.slip_stock) * stocks_value + (s.fee + s.slip_fund) * sum(
-                r["value"] for r in rows if r["kind"] not in ("share", "bond_issue")) + (s.fee_fut + s.slip_fut) * sum(abs(f["notional"]) for f in fut),
+                r["value"] for r in rows if r["kind"] not in ("share", "bond_issue", "fx_bond", "gold"))
+            + (s.fee_fut + s.slip_fut) * sum(abs(f["notional"]) for f in fut),
             "rounding": sum(devs) / max(h[0] * C, 1.0) if devs else 0.0,
             "off": sum(1 for r in rows if r["kind"] == "share" and r["target"] and abs(r["value"] / r["target"] - 1) > 0.25)}
 
@@ -585,7 +626,7 @@ def _bond_rows(d: book.Data, amount: float) -> list[dict]:
     from . import bonds
     pol = d.bond_policy or {}
     out = []
-    for b in bonds.plan_issues(pol.get("mix", {}), pol.get("today", {})):
+    for b in bonds.plan_issues(pol.get("mix", {}), without_exits(pol.get("today", {}))):
         clean = b["price"] / 100 * b["face"]
         dirty = clean + b["accint"]
         target = amount * b["weight"]
@@ -595,6 +636,19 @@ def _bond_rows(d: book.Data, amount: float) -> list[dict]:
                     "ytm": b["ytm"], "duration": b["duration"], "lots": lots, "units": lots, "value": lots * dirty,
                     "target": target, "spread": None})
     return out
+
+
+def without_exits(today: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """Today's issues of every kind less those an exchange event takes out (a default, a bankruptcy, the defaulted
+    bonds' sector, a delisting - of the issue or of its issuer, events.py): the plan picks the next ones instead."""
+    codes = sorted({b["secid"] for items in today.values() for b in items})
+    if not codes:
+        return today
+    try:
+        st = events.check(codes)
+    except Exception:  # noqa: BLE001 - the exchange's news did not load: the issues as they are
+        return today
+    return {k: [b for b in items if st.get(b["secid"], {}).get("status") != "exclude"] for k, items in today.items()}
 
 
 def _fund_row(mk: Market, code: str, kind: str, amount: float) -> dict:
@@ -741,7 +795,7 @@ def report(req: dict) -> dict:
         eq = np.cumprod(1 + np.nan_to_num(x))
         series[k] = [float(eq[i]) for i in idx]
     today = book.today_section(d, o, res)
-    pl = plan(d, o, mk, s, res)
+    pl = plan(d, o, mk, s, res, _capital(d, o, res, s))
     w = wealth(d, s, s.capital, today["scenarios"])
     return {
         "meta": {"opts": o.as_dict(), "from": d.dates[res["t0"]], "to": d.dates[-1], "years": live["years"],
@@ -752,15 +806,17 @@ def report(req: dict) -> dict:
     }
 
 
-PLAN_VERSION = 2  # 2: own bonds as issues (kind "bond_issue": clean price a bond, accint, face, price_pct)
+PLAN_VERSION = 3  # 2: own bonds as issues (kind "bond_issue"); 3: the whole capital ("capital": gold, currency bonds)
 SLEEVE_KEYS = ("equity", "bonds", "trend", "cash")
 
 
 def export(req: dict) -> dict:
     """The plan for the trading bot (trade-t-bot reads the file, compares it with the broker account and shows the
-    orders in the app): today's weights of the book as shares of the whole capital - every picked share, the bond,
-    index and money-market funds, the futures' notionals - with today's lot sizes and prices. The bot turns the
-    weights into lots from the account's real value, so the plan does not depend on the capital set here."""
+    orders in the app): today's weights of the book as shares of the book's capital - every picked share, the bond,
+    index and money-market funds, the futures' notionals - with today's lot sizes and prices; and (version 3) the whole
+    capital's plan: its shares, the wealth outside the broker accounts, the exchange gold and the currency bonds. The
+    bot works out the book's capital (the broker capital less the gold and the currency bonds the account holds for the
+    whole capital) and the lots from the account's real value, so the plan does not depend on the capital set here."""
     from datetime import UTC, datetime
 
     from .study import clean
@@ -772,15 +828,16 @@ def export(req: dict) -> dict:
         raise ValueError("данные блоков собраны старой версией: перезапустите расчёт")
     mk = market(d)
     res = book.run(d, o, log=True)
-    pl = plan(d, o, mk, s, res)
+    cap = _capital(d, o, res, s)
+    pl = plan(d, o, mk, s, res, cap)
     today = book.today_section(d, o, res)
     C = pl["capital"]
     rows = []
     for r in pl["rows"]:
-        if r["kind"] == "mmf":
+        if r["kind"] in ("mmf", "gold", "fx_bond"):
             continue
-        row = {"kind": r["kind"], "code": r["code"], "name": r["name"], "weight": r["target"] / C, "lot": r["lot"],
-               "price": r["price"], "status": r.get("status", "ok"), "events": r.get("events", [])}
+        row = {"kind": r["kind"], "code": r["code"], "name": r["name"], "weight": r["target"] / C if C > 0 else 0.0,
+               "lot": r["lot"], "price": r["price"], "status": r.get("status", "ok"), "events": r.get("events", [])}
         if r["kind"] == "bond_issue":
             row.update({k: r[k] for k in ("accint", "face", "price_pct", "bond_kind", "ytm", "duration")})
         rows.append(row)
@@ -803,7 +860,29 @@ def export(req: dict) -> dict:
                   "rule": o.trend},
         "rows": rows, "futures": futures,
         "worst": [{"label": x["label"], "loss": x["loss"]} for x in today["scenarios"][:3]], "limit": o.limit,
+        "capital": _capital_export(cap, pl),
     })
+
+
+def _capital(d: book.Data, o: book.Opts, res: dict, s: Settings) -> dict | None:
+    from . import capital
+    try:
+        return capital.plan_section(d, o, res, s)
+    except Exception as e:  # noqa: BLE001 - gold, the rates or the bonds did not load: the book alone, said so
+        d.notes.append(f"план всего капитала не посчитался ({e}): только портфель из блоков")
+        return None
+
+
+def _capital_export(cap: dict | None, pl: dict) -> dict | None:
+    """The whole capital's part of the plan (version 3): the plan's shares of the whole capital, the wealth outside the
+    broker accounts in roubles, the rates, and the exchange gold and currency bonds - their weights are shares of their
+    class's amount on the account, which the bot works out from the account's real value."""
+    if not cap:
+        return None
+    status = {r["code"]: r for r in pl["rows"] if r["kind"] in ("gold", "fx_bond")}
+    rows = [{**r, "status": status.get(r["code"], {}).get("status", "ok"), "events": status.get(r["code"], {}).get("events", [])}
+            for r in cap["rows"]]
+    return {**{k: cap[k] for k in ("plan", "title", "shares", "outside", "rates", "regime")}, "rows": rows}
 
 
 def write_export(path, req: dict | None = None) -> dict:

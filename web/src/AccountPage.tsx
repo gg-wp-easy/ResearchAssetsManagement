@@ -227,13 +227,15 @@ function AccountView({ r, stale }: { r: AccountResult; stale: boolean }) {
 const BOND_KINDS: Record<string, string> = { ofz_float: "ОФЗ-ПК", ofz_short: "короткие ОФЗ", ofz_ladder: "лестница ОФЗ",
   corp_fixed: "короткие корпоративные", corp_float: "корпоративные флоатеры", ofz_long: "длинные ОФЗ", ofz_linker: "ОФЗ-ИН" };
 
+const CCY: Record<string, string> = { CNY: "¥", USD: "$", EUR: "€", RUB: "₽" };
+
 function Plan({ r }: { r: AccountResult }) {
   const p = r.plan;
   const W = ["акции", "облигации", "тренд", "деньги"];
   const stocks = p.rows.filter((x) => x.kind === "share");
   return (
-    <Card title={`План на сегодня: что держать на ${rub(p.capital)}`}
-      sub={<>Доли портфеля из блоков на {day(p.date)}: {W.map((w, i) => `${w} ${pct(p.weights[i], 0)}`).join(", ")}. Отклонение — от цели в рублях из-за <Term k="lot_rounding">целых лотов</Term>{stocks.length ? `: ${p.off} из ${stocks.length} бумаг дальше 25% от цели, в сумме ${pct(p.rounding, 0)} блока акций.` : "."}</>}>
+    <Card title={`План на сегодня: что держать на ${rub(p.account ?? p.capital)}`}
+      sub={<>{p.capital_plan && (p.on_account.gold > 0 || p.on_account.fx > 0) ? <>План всего капитала «{p.capital_plan.title}»: на счёте биржевое золото {rub(p.on_account.gold)} и валютные облигации {rub(p.on_account.fx)}, портфелю из блоков — {rub(p.capital)}. </> : ""}Доли портфеля из блоков на {day(p.date)}: {W.map((w, i) => `${w} ${pct(p.weights[i], 0)}`).join(", ")}. Отклонение — от цели в рублях из-за <Term k="lot_rounding">целых лотов</Term>{stocks.length ? `: ${p.off} из ${stocks.length} бумаг дальше 25% от цели, в сумме ${pct(p.rounding, 0)} блока акций.` : "."}</>}>
       <TableWrap label="План: бумаги и фонды">
         <table className="compact">
           <thead><tr><th>Бумага</th><th className="r">Лотов × лот</th><th className="r">Цена</th><th className="r">Сумма</th><th className="r">Цель</th><th className="r" title="жирным — дальше 25% от цели">Отклонение</th><th>События</th></tr></thead>
@@ -242,8 +244,8 @@ function Plan({ r }: { r: AccountResult }) {
               <tr key={x.code}>
                 <td><b>{x.code}</b> <span className="muted">{x.name}</span></td>
                 <td className="r nowrap">{x.lots.toLocaleString("ru-RU")} × {x.lot.toLocaleString("ru-RU")}</td>
-                <td className="r nowrap">{x.kind === "bond_issue"
-                  ? <>{num(x.price_pct, 2)}%<small className="muted"> + НКД {num(x.accint, 2)}</small></>
+                <td className="r nowrap">{x.kind === "bond_issue" || x.kind === "fx_bond"
+                  ? <>{num(x.price_pct, 2)}%<small className="muted"> + НКД {num(x.accint, 2)}{x.kind === "fx_bond" ? ` ${CCY[x.currency ?? ""] ?? x.currency}` : ""}</small></>
                   : num(x.price, x.price < 10 ? 4 : 2)}</td>
                 <td className="r nowrap">{rub(x.value)}</td>
                 <td className="r nowrap">{rub(x.target)}</td>
@@ -355,7 +357,7 @@ function Wealth({ r }: { r: AccountResult }) {
   if (w.items.length < 2) {
     return (
       <Card title="Весь капитал вместе с подушкой">
-        <p className="hint">Добавь выше физическое золото, наличную валюту и фонды недвижимости — здесь появится, как весь капитал проходит те же сценарии, что и счёт.</p>
+        <p className="hint">Добавь выше физическое золото, наличную валюту и фонды недвижимости — здесь появится, как весь капитал проходит те же сценарии, что и счёт. Планы долей всего капитала — на странице <a href="#/capital">«Весь капитал»</a>.</p>
       </Card>
     );
   }
@@ -390,7 +392,7 @@ function Wealth({ r }: { r: AccountResult }) {
         </table>
       </TableWrap>
       {w.notes.length > 0 && <ul className="foot">{w.notes.map((n) => <li key={n}>{n}</li>)}</ul>}
-      <p className="foot">Счёт в обвале рубля теряет немного: тренд в шорте юаня и золота — на ограниченную долю, а предел сценариев режет его заранее. Подушка в рублях в такой сценарий дорожает — она и есть страховка от дефолта и девальвации, которой счёт сам себе не даёт. В сценарии «укрепление рубля» она дешевеет.</p>
+      <p className="foot">Сколько держать в золоте и валюте и что докупить на счёте — на странице <a href="#/capital">«Весь капитал»</a>. Счёт в обвале рубля теряет немного: тренд в шорте юаня и золота — на ограниченную долю, а предел сценариев режет его заранее. Подушка в рублях в такой сценарий дорожает — она и есть страховка от дефолта и девальвации, которой счёт сам себе не даёт. В сценарии «укрепление рубля» она дешевеет.</p>
     </Card>
   );
 }
