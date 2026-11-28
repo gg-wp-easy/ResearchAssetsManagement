@@ -5,7 +5,8 @@
 - MOEX ISS (`moex:<market>:<secid>`, market = shares | index | currency | futures): closes of the main boards. A share is
   brought to today's share count by ISS's splits and, where server-analytic-system's data is at hand, gets its T-Invest
   dividends (from 2019): the total return, as MCFTR counts it (before tax). ISS no longer publishes dividends itself.
-- The Bank of Russia (`cbr:<ISO code>` - the official rate in rubles, from 1998; `cbr:RUONIA` - from 2010).
+- The Bank of Russia (`cbr:<ISO code>` - the official rate in rubles, from 1998; `cbr:RUONIA` - from 2010;
+  `cbr:KEYRATE` - the key rate, from 2013-09-13).
 """
 from __future__ import annotations
 
@@ -423,6 +424,8 @@ def cbr_codes() -> dict[str, dict]:
 def cbr(code: str) -> Series:
     if code == "RUONIA":
         return ruonia()
+    if code == "KEYRATE":
+        return keyrate()
     codes = cbr_codes()
     if code not in codes:
         raise NotFound(f"Банк России не устанавливает курс {code}")
@@ -440,6 +443,26 @@ def cbr(code: str) -> Series:
     days = sorted(by_day)
     return Series(id=f"cbr:{code}", name=f"{codes[code]['name']} ({code}/RUB, курс Банка России)", currency="RUB",
                   dates=days, values=np.array([by_day[d] for d in days]), source="Банк России", type="currency")
+
+
+def _keyrate_year(year: int) -> list[tuple[str, float]]:
+    until = min(date(year, 12, 31), date.today())
+    body = ('<?xml version="1.0" encoding="utf-8"?><soap12:Envelope xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">'
+            f'<soap12:Body><KeyRate xmlns="http://web.cbr.ru/"><fromDate>{year}-01-01</fromDate><ToDate>{until}</ToDate>'
+            '</KeyRate></soap12:Body></soap12:Envelope>')
+    xml = fetch(f"{CBR}/DailyInfoWebServ/DailyInfo.asmx", data=body.encode(),
+                headers={"Content-Type": "application/soap+xml; charset=utf-8"}, timeout=120).decode("utf-8")
+    return [(d, float(v)) for d, v in re.findall(r"<DT>(\d{4}-\d\d-\d\d)T[^<]*</DT><Rate>([\d.]+)</Rate>", xml)]
+
+
+def keyrate() -> Series:
+    """The Bank of Russia's key rate on each working day, from 2013-09-13 (when it was introduced)."""
+    with ThreadPoolExecutor(6) as pool:
+        years = list(pool.map(_keyrate_year, range(2013, date.today().year + 1)))
+    by_day = {d: v / 100 for rows in years for d, v in rows}
+    days = sorted(by_day)
+    return Series(id="cbr:KEYRATE", name="ключевая ставка Банка России", currency="RUB", dates=days,
+                  values=np.array([by_day[d] for d in days]), source="Банк России", type="rate", kind="rate")
 
 
 def _ruonia_year(year: int) -> list[tuple[str, float]]:

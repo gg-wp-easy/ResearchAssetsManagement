@@ -1,4 +1,4 @@
-"""ram serve | study | fetch | search | factors | ml | book | valuation."""
+"""ram serve | study | fetch | search | factors | ml | book | account | events | bonds | valuation."""
 from __future__ import annotations
 
 import argparse
@@ -54,6 +54,10 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("--portfolios", action="store_true", help="проверить портфели SAS и отбор портфеля из блоков")
     ev.add_argument("--stop", nargs="+", metavar=("КОД", "ПРИЧИНА"), help="добавить бумагу в стоп-лист")
     ev.add_argument("--unstop", help="убрать бумагу из стоп-листа")
+    bo = sub.add_parser("bonds", help="облигации из выпусков: ОФЗ ПД, ПК, ИН, корпоративные — против индексов и SBGB")
+    bo.add_argument("--tax", type=float, default=0.13, help="налог с купонов (0 — ИИС с освобождением дохода)")
+    bo.add_argument("--start", default="2014-01-31")
+    bo.add_argument("--today", action="store_true", help="показать сегодняшний состав каждого вида")
     va = sub.add_parser("valuation", help="оценка server-analytic-system на дату и сверка с его срезом")
     va.add_argument("--date", default="2025-10-31")
     a = ap.parse_args(argv)
@@ -213,6 +217,30 @@ def main(argv: list[str] | None = None) -> int:
         lo = (__import__("datetime").date.today() - __import__("datetime").timedelta(days=a.days)).isoformat()
         for e in [e for e in evs if e.date >= lo and e.level == "exclude"]:
             print(f"  {e.date} {events.KINDS[e.kind][0]:26} {e.issuer[:44]:44} {','.join(e.codes[:2]):28} {e.reason[:60]}")
+        return 0
+    if a.cmd == "bonds":
+        from . import bonds
+        rep = bonds.report(a.tax, a.start, progress=lambda w: print(f"  {w}", file=sys.stderr))
+        print(f"Облигации из выпусков на {rep['date']}: с {rep['start']} и за 5 лет с {rep['recent_from']}; "
+              f"налог с купонов {rep['tax']:.0%} (после налога — колонка «налог»)")
+        print(f"{'':48} {'с':>10} {'год. дох.':>9} {'налог':>7} {'волат.':>7} {'просадка':>8} {'Шарп':>5} | "
+              f"{'5 лет':>7} {'налог':>7} {'просадка':>8} {'бумаг':>5}")
+
+        def pc(x):
+            return f"{x:7.1%}" if x is not None else "      —"
+        for r in rep["rows"]:
+            w, rc, wt, rt = r["whole"], r["recent"], r["whole_tax"] or {}, r["recent_tax"] or {}
+            print(f"{r['title'][:48]:48} {r['from']:>10} {pc(w.get('cagr')):>9} {pc(wt.get('cagr'))} {pc(w.get('vol'))} "
+                  f"{pc(w.get('dd')):>8} {w.get('sharpe', 0):5.2f} | {pc(rc.get('cagr'))} {pc(rt.get('cagr'))} "
+                  f"{pc(rc.get('dd')):>8} {r['issues'] or 0:5.1f}")
+        if a.today:
+            for kind, items in rep["today"].items():
+                print(f"\n{rep['titles'][kind]}: {len(items)}")
+                for b in items:
+                    print(f"  {b['secid']:14} {b['name'][:22]:22} цена {b['price']:7.2f}  дох. {pc(b['ytm'])}  "
+                          f"дюр. {b['duration'] or 0:4.1f}  спред {pc(b['spread'])}  до погаш./оферты {b['life'] or 0:4.1f} г.")
+        for n in rep["notes"]:
+            print("•", n)
         return 0
     if a.cmd == "valuation":
         from . import universe, valuation

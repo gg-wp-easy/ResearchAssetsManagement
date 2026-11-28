@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, account, book, events, factors, ml, sas, sources, watch
+from . import __version__, account, bonds, book, events, factors, ml, sas, sources, watch
 from .net import NotFound
 from .presets import PRESETS
 from .rule import CONTROLS, Params
@@ -143,6 +143,25 @@ def book_report(req: dict) -> dict:
             raise HTTPException(404, str(e)) from e
         except (ValueError, KeyError, TypeError) as e:
             raise HTTPException(400, str(e)) from e
+    return _remember(key, res)
+
+
+@app.post("/api/bonds")
+def bonds_report(req: dict) -> dict:
+    """The bond sleeve from single issues (bonds.py): OFZ ПД, ПК, ИН and corporates against the indices and SBGB."""
+    tax = float(req.get("tax", bonds.TAX))
+    if not 0 <= tax < 1:
+        raise HTTPException(400, "налог — доля от 0 до 1")
+    key = f"bonds:{tax}"
+    with _lock:
+        if key in _results:
+            _results.move_to_end(key)
+            return _results[key]
+    with _factor_lock:
+        try:
+            res = clean(bonds.report(tax))
+        except NotFound as e:
+            raise HTTPException(404, str(e)) from e
     return _remember(key, res)
 
 

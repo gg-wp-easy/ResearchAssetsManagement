@@ -8,8 +8,9 @@
 #   * data/user (the settings of «Мой счёт», the stop list) and data/cache (TQBR weeks, ISS/Yahoo/CBR series, the ML
 #     forecasts: the first plan then takes seconds, and a source the server cannot reach falls back to these copies);
 #   * the part of server-analytic-system's data the plan reads (dividends, smart-lab reports, the share snapshots,
-#     the bond portfolios) into REMOTE_DIR/sas-data.
-# Then it runs scripts/vps/install.sh on the server with sudo (it asks for the password there).
+#     the bond portfolios, T-Invest's bond list with the broker's risk levels) into REMOTE_DIR/sas-data.
+# Then it runs scripts/vps/install.sh on the server with sudo (it asks for the password there unless sudoers lets the
+# user run `bash REMOTE_DIR/scripts/vps/install.sh`, `mkdir -p REMOTE_DIR` and `chown <user> REMOTE_DIR` without one).
 # Run it again after a change in the lab or to refresh the dividends and reports.
 set -Eeuo pipefail
 
@@ -38,7 +39,7 @@ if [[ -d "${SAS_DATA}" ]]; then
   log "server-analytic-system data (${SAS_DATA})"
   rsync -az --prune-empty-dirs \
     --include='tbank_dividends.csv' --include='smartlab_financials.csv' --include='smartlab_quarterly.csv' \
-    --include='shares.json' --include='stock_snapshot_*/' --include='stock_snapshot_*/**' \
+    --include='shares.json' --include='bonds_data.json' --include='stock_snapshot_*/' --include='stock_snapshot_*/**' \
     --include='notebook_reports/' --include='notebook_reports/bonds/' --include='notebook_reports/bonds/portfolios/' \
     --include='notebook_reports/bonds/portfolios/*.csv' --exclude='*' \
     "${SAS_DATA}/" "${VPS}:${REMOTE_DIR}/sas-data/"
@@ -47,4 +48,4 @@ else
 fi
 
 log "Installing on the server (sudo)"
-"${SSH}" -t "${VPS}" "sudo REMOTE_DIR='${REMOTE_DIR}' bash '${REMOTE_DIR}/scripts/vps/install.sh'"
+"${SSH}" -t "${VPS}" "sudo bash '${REMOTE_DIR}/scripts/vps/install.sh'"  # it finds REMOTE_DIR from its own path

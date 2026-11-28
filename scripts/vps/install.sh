@@ -8,7 +8,7 @@
 # The bot (trade-t-bot) reads the file named in its config.toml: [portfolio] plan_file.
 set -Eeuo pipefail
 
-REMOTE_DIR="${REMOTE_DIR:-/opt/ResearchAssetsManagement}"
+REMOTE_DIR="${REMOTE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"  # the lab this script came with
 BOT_SERVICE="${BOT_SERVICE:-trade-t-bot}"
 PLAN_ARGS="${PLAN_ARGS:---trend main_guard --limit 0.25}"
 

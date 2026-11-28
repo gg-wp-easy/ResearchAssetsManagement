@@ -230,6 +230,18 @@ export interface AccountResult {
   elapsed: number;
 }
 
+export interface BondStats { cagr: number; vol: number; sharpe: number; dd: number; dd_from: string; dd_to: string;
+  worst_week: number; worst_4w: N; years: number }
+export interface BondRow { key: string; title: string; from: string; whole: Partial<BondStats>; recent: Partial<BondStats>;
+  whole_tax: Partial<BondStats> | null; recent_tax: Partial<BondStats> | null; issues: N }
+export interface BondIssue { secid: string; name: string; price: number; accint: number; face: number; ytm: N; duration: N;
+  spread: N; margin: N; life: N; value4: number; group: string }
+export interface BondsResult { date: string; start: string; recent_from: string; tax: number; rows: BondRow[];
+  years: ({ year: string } & Record<string, number | string>)[]; curves: { dates: string[]; series: Record<string, N[]> };
+  today: Record<string, BondIssue[]>; notes: string[]; titles: Record<string, string>;
+  params: { buy_life: number; sell_life: number; min_value: number; spread_cap: number; float_margin: number; max_corp: number;
+    max_ofz: number; cost: Record<string, number> } }
+
 export const api = {
   meta: () => call<Meta>("/api/meta"),
   search: (q: string, signal?: AbortSignal) => call<SearchHit[]>(`/api/search?q=${encodeURIComponent(q)}`, { signal }),
@@ -249,6 +261,8 @@ export const api = {
   stoplist: () => call<{ items: StopItem[] }>("/api/events/stoplist"),
   saveStoplist: (items: StopItem[]) => call<{ items: StopItem[] }>("/api/events/stoplist", {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) }),
+  bonds: (tax = 0.13) => call<BondsResult>("/api/bonds", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tax }) }),
   book: (req: BookRequest) => call<BookResult>("/api/book", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) }),
   account: (opts: Partial<BookRequest>) => call<AccountResult>("/api/account", {
