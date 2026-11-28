@@ -51,7 +51,8 @@ EQUITY = [("composite", "отбор: моментум, низкая волати
           ("gbm", "отбор: ML-бустинг ценовых факторов"),
           ("ew", "все 100 бумаг поровну"),
           ("mcftr", "индекс MCFTR")]
-BONDS = [("ofz", "ОФЗ (RGBITR)"), ("corp", "корпоративные (RUCBITR → RUCBTRNS)")]
+BONDS = [("ofz", "ОФЗ (RGBITR)"), ("corp", "корпоративные (RUCBITR → RUCBTRNS)"),
+         ("own", "свои выпуски по режиму ЦБ (bonds.py)")]
 TRENDS = [("main", "основной счёт бота"), ("main_guard", "основной с защитой")]
 SLEEVES = ["equity", "bonds", "trend", "cash"]
 SLEEVE_TITLES = {"equity": "акции", "bonds": "облигации", "trend": "тренд бота", "cash": "деньги"}
@@ -64,6 +65,9 @@ CAP_BUFFER = 0.95  # a cut brings the worst loss to 95% of the limit: the weight
 LIMITS = (0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.0)  # the price of the cap: the book at each limit (0: none)
 BAND = 0.05  # between month-ends the book trades only when a sleeve is this far (share of the capital) from its target
 CORP_SWITCH = "2018-12-29"  # RUCBTRNS starts
+# own bonds (floaters and short ones) are nearly money: with a third of the risk they took ~80% of the capital and the
+# book lost two points a year; with a tenth, 2016-2026: 15.0% a year, drawdown 6.2% (the OFZ index: 15.3%, 10%)
+OWN_BUDGET = (0.45, 0.10, 0.45)
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,8 @@ class Opts:
             known["events"] = bool(known["events"])
         if "start" in known:
             known["start"] = date.fromisoformat(str(known["start"])[:10]).isoformat()
+        if known.get("bonds") == "own" and "budget" not in known and known.get("method", "risk") == "risk":
+            known["budget"] = OWN_BUDGET
         o = Opts(**known)
         if o.equity not in dict(EQUITY) or o.bonds not in dict(BONDS) or o.trend not in dict(TRENDS):
             raise ValueError("блок: акции — " + ", ".join(dict(EQUITY)) + "; облигации — " + ", ".join(dict(BONDS))
@@ -144,6 +150,7 @@ class Data:
     events_from: str | None = None  # the news the filter has seen start here
     fut_xr: np.ndarray = None  # W x 4 weekly excess returns of the trend book's markets (a futures contract's return)
     fut_px: np.ndarray = None  # W x 4 their price levels (to scale today's contract value back in time)
+    bond_policy: dict | None = None  # the own bonds' regime, mix and today's issues (bonds.py), once "own" is asked for
 
 
 _cache: dict[tuple, Data] = {}
@@ -394,7 +401,31 @@ def equity_key(o: Opts) -> str:
     return o.equity if o.events or o.equity == "mcftr" else f"{o.equity}:raw"
 
 
+def on_weeks(src_days: list[str], x: np.ndarray, days: list[str]) -> np.ndarray:
+    """A weekly series moved onto other weekly dates by the week's Friday (both are one session a week)."""
+    def fri(s: str) -> str:
+        d0 = date.fromisoformat(s)
+        return date.fromordinal(d0.toordinal() + (4 - d0.weekday()) % 7).isoformat()
+    by = {fri(a): v for a, v in zip(src_days, x)}
+    return np.array([by.get(fri(a), np.nan) for a in days], float)
+
+
+def ensure(d: Data, o: Opts) -> None:
+    """The own bonds' sleeve (bonds.py: the Bank of Russia's regime mix of floaters and short bonds) is built only when
+    asked for: its market takes half an hour to load the first time. "bonds:own" is before the coupon tax,
+    "bonds:own:tax" after it."""
+    if o.bonds != "own" or "bonds:own" in d.returns:
+        return
+    from . import bonds
+    sl = bonds.build()
+    d.returns["bonds:own"] = on_weeks(sl.dates, sl.returns["policy"], d.dates)
+    d.returns["bonds:own:tax"] = on_weeks(sl.dates, sl.returns["policy:tax"], d.dates)
+    d.bond_policy = {**sl.policy, "today": sl.today}
+    d.notes.extend(n for n in sl.notes if n not in d.notes)
+
+
 def assemble(d: Data, o: Opts) -> Book:
+    ensure(d, o)
     keys = [f"equity:{equity_key(o)}", f"bonds:{o.bonds}", f"trend:{o.trend}", "cash"]
     return Book(o=o, keys=keys, R=np.column_stack([d.returns[k] for k in keys]), pos=d.pos[o.trend],
                 picks=d.picks.get(equity_key(o), {}))
@@ -563,7 +594,10 @@ def decide(d: Data, bk: Book, t: int, budget: np.ndarray, scen: Scenarios) -> di
         rc[idx] = contributions(cov, wi)
     w[3] = 1 - w[:3].sum()
     b_eq = max(1.0, beta(bk.R[lo:t + 1, 0], d.mkt[lo:t + 1, 0])) if bk.o.equity != "mcftr" else 1.0
-    b_bd = max(1.0, beta(bk.R[lo:t + 1, 1], d.mkt[lo:t + 1, 1])) if bk.o.bonds != "ofz" else 1.0
+    if bk.o.bonds == "own":  # floaters and short bonds move much less than the OFZ index: their own beta, no floor of 1
+        b_bd = min(1.5, max(0.1, beta(bk.R[lo:t + 1, 1], d.mkt[lo:t + 1, 1])))
+    else:
+        b_bd = max(1.0, beta(bk.R[lo:t + 1, 1], d.mkt[lo:t + 1, 1])) if bk.o.bonds != "ofz" else 1.0
     moves = scen.sleeve_moves(bk.pos[t], b_eq, b_bd)
     loss = scen.losses(w[:3], moves)
     g = int(np.argmax(loss))

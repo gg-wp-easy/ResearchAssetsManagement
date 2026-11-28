@@ -281,18 +281,25 @@ def trade_weeks(d: book.Data, o: book.Opts, res: dict) -> set[int]:
     return out
 
 
+OWN_DRAG = {"secid": "свои выпуски", "index": "", "drag": 0.0, "years": 0.0, "from": None, "measured": True}
+
+
 def drags(o: book.Opts, s: Settings) -> dict[str, dict]:
-    return {"mmf": fund_drag(s.mmf, "mmf"),
-            "bond": fund_drag(s.bond_fund, "bond") if o.bonds == "ofz" else fund_drag(CORP_FUND, "corp"),
+    bond = (OWN_DRAG if o.bonds == "own" else fund_drag(s.bond_fund, "bond") if o.bonds == "ofz"
+            else fund_drag(CORP_FUND, "corp"))
+    return {"mmf": fund_drag(s.mmf, "mmf"), "bond": bond,
             "index": fund_drag(s.index_fund, "index")}
 
 
 def simulate(d: book.Data, o: book.Opts, mk: Market, s: Settings, capital: float, res: dict | None = None,
              dr: dict | None = None) -> dict:
     """The account at `capital` from the book's first decision to the panel's last week (see the module's notes)."""
+    book.ensure(d, o)
     res = res or book.run(d, o)
     dr = dr or drags(o, s)
     t0, H = res["t0"], res["held"]
+    own = o.bonds == "own"  # single issues: the coupon tax is withheld at each payment, no tax on selling a fund
+    r_own_tax = d.returns["bonds:own:tax"] if own else None
     W = len(d.dates)
     traded = trade_weeks(d, o, res)
     stocks = o.equity != "mcftr"
@@ -340,7 +347,8 @@ def simulate(d: book.Data, o: book.Opts, mk: Market, s: Settings, capital: float
         if amount < 0:
             amount = -min(-amount, v)
             frac = -amount / v if v > 0 else 0.0
-            acc["realized"] += (v - b) * frac
+            if not (own and k == "bond"):  # own bonds: their coupons were taxed when paid
+                acc["realized"] += (v - b) * frac
             funds[k] = [v + amount, b * (1 - frac)]
         else:
             funds[k] = [v + amount, b + amount]
@@ -392,6 +400,11 @@ def simulate(d: book.Data, o: book.Opts, mk: Market, s: Settings, capital: float
                 if v:
                     hv[0] = v * (1 + float(np.nan_to_num(rets[k][t])) - lag[k])
                     cost["drag"] += v * lag[k]
+                    if own and k == "bond":  # the broker withholds 13% of each coupon: out of the money
+                        withheld = v * float(np.nan_to_num(rets[k][t]) - np.nan_to_num(r_own_tax[t]))
+                        flow -= withheld
+                        cost["income_tax"] += withheld
+                        acc["shadow"] += withheld
             xr = np.nan_to_num(d.fut_xr[t])
             if weekly:
                 pnl = float((nf * mk.V[t - 1]) @ xr)
@@ -454,7 +467,8 @@ def simulate(d: book.Data, o: book.Opts, mk: Market, s: Settings, capital: float
         settle(flow)
         held = n > 0
         nav[t] = float(n[held] @ px[held]) + sum(v for v, _ in funds.values())
-    unreal = float(((mk.P[-1] - avg) * n)[n > 0].sum()) + sum(v - b for v, b in funds.values())
+    unreal = float(((mk.P[-1] - avg) * n)[n > 0].sum()) + sum(v - b for k, (v, b) in funds.items()
+                                                                 if not (own and k == "bond"))
     final_tax = s.tax * max(0.0, acc["realized"] + unreal - acc["carry"])
     v = nav[t0:]
     x = v[1:] / v[:-1] - 1
@@ -521,7 +535,9 @@ def plan(d: book.Data, o: book.Opts, mk: Market, s: Settings, res: dict) -> dict
                          "spread": sp.get("spread")})
     else:
         rows.append(_fund_row(mk, s.index_fund, "index", h[0] * C))
-    if s.bonds == "fund" or o.bonds != "ofz":
+    if o.bonds == "own":
+        rows.extend(_bond_rows(d, h[1] * C))
+    elif s.bonds == "fund" or o.bonds != "ofz":
         rows.append(_fund_row(mk, s.bond_fund if o.bonds == "ofz" else CORP_FUND, "bond", h[1] * C))
     capT = h[2] * C
     target = np.nan_to_num(d.pos[o.trend][t]) * capT
@@ -539,25 +555,46 @@ def plan(d: book.Data, o: book.Opts, mk: Market, s: Settings, res: dict) -> dict
     mmf = _fund_row(mk, s.mmf, "mmf", C - spent)
     rows.append(mmf)
     status = {}
-    if names:
+    checked = names + [r["code"] for r in rows if r["kind"] == "bond_issue"]
+    if checked:
         try:
-            status = events.check(names)
+            status = events.check(checked)
         except Exception:  # noqa: BLE001 - the exchange's news did not load
             status = {}
     for r in rows:
-        if r["kind"] == "share":
+        if r["kind"] in ("share", "bond_issue"):
             st = status.get(r["code"], {})
             r["status"] = st.get("status", "ok")
             r["events"] = st.get("events", [])[:2]
     margin = sum(f["margin"] for f in fut)
-    stocks_value = sum(r["value"] for r in rows if r["kind"] == "share")
+    stocks_value = sum(r["value"] for r in rows if r["kind"] in ("share", "bond_issue"))  # an exchange spread, not a fund's
     devs = [abs(r["value"] - r["target"]) for r in rows if r["kind"] == "share"]
+    pol = d.bond_policy if o.bonds == "own" else None
     return {"date": d.dates[t], "weights": h.tolist(), "capital": C, "rows": rows, "futures": fut,
+            "bond_policy": {k: pol[k] for k in ("regime", "title", "since", "key", "mix")} if pol else None,
             "margin": margin, "futures_money": s.futures_money, "margin_share": margin / C,
             "entry_cost": (s.fee + s.slip_stock) * stocks_value + (s.fee + s.slip_fund) * sum(
-                r["value"] for r in rows if r["kind"] != "share") + (s.fee_fut + s.slip_fut) * sum(abs(f["notional"]) for f in fut),
+                r["value"] for r in rows if r["kind"] not in ("share", "bond_issue")) + (s.fee_fut + s.slip_fut) * sum(abs(f["notional"]) for f in fut),
             "rounding": sum(devs) / max(h[0] * C, 1.0) if devs else 0.0,
             "off": sum(1 for r in rows if r["kind"] == "share" and r["target"] and abs(r["value"] / r["target"] - 1) > 0.25)}
+
+
+def _bond_rows(d: book.Data, amount: float) -> list[dict]:
+    """The own bonds' issues for `amount`: whole bonds (a lot is one bond) at the clean price plus the accrued
+    interest paid at a purchase."""
+    from . import bonds
+    pol = d.bond_policy or {}
+    out = []
+    for b in bonds.plan_issues(pol.get("mix", {}), pol.get("today", {})):
+        clean = b["price"] / 100 * b["face"]
+        dirty = clean + b["accint"]
+        target = amount * b["weight"]
+        lots = int(np.round(target / dirty)) if dirty > 0 else 0
+        out.append({"kind": "bond_issue", "code": b["secid"], "name": b["name"], "lot": 1, "price": clean,
+                    "accint": b["accint"], "face": b["face"], "price_pct": b["price"], "bond_kind": b["kind"],
+                    "ytm": b["ytm"], "duration": b["duration"], "lots": lots, "units": lots, "value": lots * dirty,
+                    "target": target, "spread": None})
+    return out
 
 
 def _fund_row(mk: Market, code: str, kind: str, amount: float) -> dict:
@@ -715,7 +752,7 @@ def report(req: dict) -> dict:
     }
 
 
-PLAN_VERSION = 1
+PLAN_VERSION = 2  # 2: own bonds as issues (kind "bond_issue": clean price a bond, accint, face, price_pct)
 SLEEVE_KEYS = ("equity", "bonds", "trend", "cash")
 
 
@@ -742,8 +779,11 @@ def export(req: dict) -> dict:
     for r in pl["rows"]:
         if r["kind"] == "mmf":
             continue
-        rows.append({"kind": r["kind"], "code": r["code"], "name": r["name"], "weight": r["target"] / C, "lot": r["lot"],
-                     "price": r["price"], "status": r.get("status", "ok"), "events": r.get("events", [])})
+        row = {"kind": r["kind"], "code": r["code"], "name": r["name"], "weight": r["target"] / C, "lot": r["lot"],
+               "price": r["price"], "status": r.get("status", "ok"), "events": r.get("events", [])}
+        if r["kind"] == "bond_issue":
+            row.update({k: r[k] for k in ("accint", "face", "price_pct", "bond_kind", "ytm", "duration")})
+        rows.append(row)
     held = sum(r["weight"] for r in rows)
     mmf = next(r for r in pl["rows"] if r["kind"] == "mmf")
     rows.append({"kind": "mmf", "code": mmf["code"], "name": mmf["name"], "weight": max(0.0, 1 - held), "lot": mmf["lot"],
@@ -754,7 +794,10 @@ def export(req: dict) -> dict:
     return clean({
         "version": PLAN_VERSION, "made": datetime.now(UTC).isoformat(timespec="seconds"), "date": d.dates[-1],
         "decided": today["decided"], "picked": today["picked"], "opts": o.as_dict(),
-        "funds": {"mmf": s.mmf, "bond": s.bond_fund, "index": s.index_fund}, "bonds_mode": s.bonds,
+        "funds": {"mmf": s.mmf, "bond": s.bond_fund, "index": s.index_fund},
+        "bonds_mode": "own" if o.bonds == "own" else s.bonds,
+        "bond_policy": ({k: d.bond_policy[k] for k in ("regime", "title", "since", "key", "mix")}
+                        if o.bonds == "own" and d.bond_policy else None),
         "weights": dict(zip(SLEEVE_KEYS, (float(x) for x in h))),
         "trend": {"weight": float(h[2]), "risk": float(next(x for x in PRESETS if x["key"] == o.trend)["params"]["risk"]),
                   "rule": o.trend},

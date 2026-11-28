@@ -199,15 +199,18 @@ export interface AccountRow {
   margin_mean?: number; margin_max?: number; trades_year?: number; final_tax?: number; end?: number; end_after_tax?: number;
 }
 export interface PlanRow {
-  kind: "share" | "bond" | "mmf" | "index"; code: string; name: string; lot: number; price: number; lots: number; units: number;
-  value: number; target: number; spread: N; status?: "exclude" | "warn" | "ok"; events?: ExchangeEvent[];
+  kind: "share" | "bond" | "mmf" | "index" | "bond_issue"; code: string; name: string; lot: number; price: number; lots: number;
+  units: number; value: number; target: number; spread: N; status?: "exclude" | "warn" | "ok"; events?: ExchangeEvent[];
+  accint?: number; face?: number; price_pct?: number; bond_kind?: string; ytm?: N; duration?: N;
 }
+export interface BondPolicy { regime: string; title: string; since: string; key: N; mix: Record<string, number> }
 export interface PlanFuture {
   kind: "future"; code: string; market: string; contracts: number; notional: number; target: number; trend: number; value: number;
   margin: number; margin_one: number;
 }
 export interface AccountPlan {
   date: string; weights: number[]; capital: number; rows: PlanRow[]; futures: PlanFuture[]; margin: number; futures_money: number;
+  bond_policy?: BondPolicy | null;
   margin_share: number; entry_cost: number; rounding: number; off: number;
 }
 export interface WealthItem { kind: "account" | "gold" | "fx" | "fund"; label: string; value: number; sale: number; share: number; detail?: string; code?: string }
@@ -239,6 +242,12 @@ export interface BondIssue { secid: string; name: string; price: number; accint:
 export interface BondsResult { date: string; start: string; recent_from: string; tax: number; rows: BondRow[];
   years: ({ year: string } & Record<string, number | string>)[]; curves: { dates: string[]; series: Record<string, N[]> };
   today: Record<string, BondIssue[]>; notes: string[]; titles: Record<string, string>;
+  policy: { regime: string; title: string; since: string; date: string; key: N; rule: Record<string, number>;
+    mix: Record<string, number>; priors: Record<string, Record<string, number>>; base: Record<string, number>;
+    history: { date: string; regime: string; key: N; mix: Record<string, number> }[];
+    issues: (BondIssue & { kind: string; weight: number })[]; plan: (BondIssue & { kind: string; weight: number })[];
+    params: { weeks: number; min_months: number; shrink_months: number; risk_aversion: number; cap: number; to_prior: number;
+      switch_cost: number } };
   params: { buy_life: number; sell_life: number; min_value: number; spread_cap: number; float_margin: number; max_corp: number;
     max_ofz: number; cost: Record<string, number> } }
 

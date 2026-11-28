@@ -8,8 +8,8 @@ import { Guide, Term } from "./help";
 import { EventLine, StatusTag } from "./eventsUi";
 
 const KEY = "ram.account.v1"; // the book's options of this page; the account's settings live on the server
-type Opts = Pick<BookRequest, "limit" | "trend" | "equity">;
-const OPTS: Opts = { limit: 0.25, trend: "main_guard", equity: "composite" };  // the bot trades the protected rule since 2026-11-27
+type Opts = Pick<BookRequest, "limit" | "trend" | "equity" | "bonds">;
+const OPTS: Opts = { limit: 0.25, trend: "main_guard", equity: "composite", bonds: "own" };  // the bot trades the protected rule since 2026-11-27; own bonds since 2026-11-28
 const FUNDS = { mmf: ["LQDT", "SBMM", "AKMM", "TMON"], bond: ["SBGB", "TOFZ"], index: ["SBMX", "TMOS", "EQMX"] };
 const FX = ["USD", "EUR", "CNY"];
 const COSTS: [keyof AccountCosts, ReactNode][] = [
@@ -224,6 +224,9 @@ function AccountView({ r, stale }: { r: AccountResult; stale: boolean }) {
   );
 }
 
+const BOND_KINDS: Record<string, string> = { ofz_float: "ОФЗ-ПК", ofz_short: "короткие ОФЗ", ofz_ladder: "лестница ОФЗ",
+  corp_fixed: "короткие корпоративные", corp_float: "корпоративные флоатеры", ofz_long: "длинные ОФЗ", ofz_linker: "ОФЗ-ИН" };
+
 function Plan({ r }: { r: AccountResult }) {
   const p = r.plan;
   const W = ["акции", "облигации", "тренд", "деньги"];
@@ -239,7 +242,9 @@ function Plan({ r }: { r: AccountResult }) {
               <tr key={x.code}>
                 <td><b>{x.code}</b> <span className="muted">{x.name}</span></td>
                 <td className="r nowrap">{x.lots.toLocaleString("ru-RU")} × {x.lot.toLocaleString("ru-RU")}</td>
-                <td className="r">{num(x.price, x.price < 10 ? 4 : 2)}</td>
+                <td className="r nowrap">{x.kind === "bond_issue"
+                  ? <>{num(x.price_pct, 2)}%<small className="muted"> + НКД {num(x.accint, 2)}</small></>
+                  : num(x.price, x.price < 10 ? 4 : 2)}</td>
                 <td className="r nowrap">{rub(x.value)}</td>
                 <td className="r nowrap">{rub(x.target)}</td>
                 <td className={"r" + (x.kind === "share" && x.target && Math.abs(x.value / x.target - 1) > 0.25 ? " dev-off" : "")}>
@@ -250,6 +255,7 @@ function Plan({ r }: { r: AccountResult }) {
           </tbody>
         </table>
       </TableWrap>
+      {p.bond_policy && <p className="foot">Облигации — свои выпуски по режиму ЦБ: «{p.bond_policy.title}» с {day(p.bond_policy.since)}, ключевая {pct(p.bond_policy.key, 2)}; {Object.entries(p.bond_policy.mix).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${BOND_KINDS[k] ?? k} ${pct(v, 0)}`).join(", ")}. Подробно — страница «Облигации».</p>}
       <TableWrap label="План: фьючерсы">
         <table className="compact">
           <thead><tr><th>Фьючерс</th><th className="r">Контрактов</th><th className="r">Номинал</th><th className="r">Цель</th><th className="r"><Term k="go">ГО</Term></th></tr></thead>

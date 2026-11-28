@@ -110,3 +110,18 @@ def test_life_runs_to_the_schedules_offer_or_coupon_reset() -> None:
     day0 = date.fromisoformat(DAYS[0])
     assert d.life[m.at(off, 0)] == pytest.approx((date(2020, 3, 1) - day0).days / 365.25), "a cancelled offer does not count"
     assert d.life[m.at(res, 0)] == pytest.approx((date(2020, 2, 1) - day0).days / 365.25), "12% then 0.01%: sold before"
+
+
+def test_the_plan_takes_a_few_issues_a_kind_and_one_row_an_issue() -> None:
+    def b(s: str, dur: float) -> dict:
+        return {"secid": s, "name": s, "duration": dur, "price": 100.0, "face": 1000.0, "accint": 0.0}
+    today = {"ofz_ladder": [b("A", 1), b("B", 3), b("C", 5), b("D", 8), b("E", 11)],
+             "ofz_short": [b("A", 1), b("F", 2)], "corp_float": []}
+    out = bonds.plan_issues({"ofz_ladder": 0.6, "ofz_short": 0.2, "corp_float": 0.2}, today, most=4)
+    codes = [x["secid"] for x in out]
+    assert len(codes) == len(set(codes)), "an issue of two kinds is one row"
+    assert sum(x["weight"] for x in out) == pytest.approx(1.0), "the floaters' share (no issues today) goes to the others"
+    ladder = {x["secid"] for x in out if x["kind"] == "ofz_ladder"}
+    assert ladder == {"A", "C", "E"}, "the ladder spread over its durations"
+    a = next(x for x in out if x["secid"] == "A")
+    assert a["weight"] == pytest.approx(0.75 / 3 + 0.25 / 1)

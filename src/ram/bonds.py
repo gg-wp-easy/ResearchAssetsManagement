@@ -30,6 +30,7 @@ from itertools import pairwise
 import numpy as np
 
 from . import bondmarket as bm
+from . import bondpolicy as bp
 from . import sas, sources
 from .assets import carry_rate, ffill_on
 from .factors import month_ends
@@ -40,7 +41,7 @@ KINDS = [
     ("ofz_ladder", "Лестница ОФЗ с постоянным купоном, 0,5–12 лет"),
     ("ofz_float", "ОФЗ-ПК, флоатеры"),
     ("ofz_linker", "ОФЗ-ИН, линкеры"),
-    ("corp_fixed", "Корпоративные и региональные, постоянный купон"),
+    ("corp_fixed", "Корпоративные и региональные, постоянный купон, до 3 лет"),
     ("corp_float", "Корпоративные и региональные, флоатеры"),
 ]
 KIND_TITLES = dict(KINDS)
@@ -269,7 +270,7 @@ def kind_rows(kind: str, m: bm.Market, d: Rows, groups: np.ndarray, base: np.nda
         sel = (g == kind) & life
     else:
         ok = np.isin(base, quality)
-        sel = ok & (g == kind) & life & ((dur <= 5) | (kind == "corp_float") | ~np.isfinite(dur))
+        sel = ok & (g == kind) & life & ((dur <= 3) | (kind == "corp_float") | ~np.isfinite(dur))
     return base[sel]
 
 
@@ -391,6 +392,13 @@ class Sleeve:
     held: dict[str, dict[int, list[int]]]
     notes: list[str]
     today: dict[str, list[dict]]
+    policy: dict
+
+
+def raw_key_rate(days: list[str]) -> np.ndarray:
+    """The key rate on `days`, NaN before 2013-09-13 (the regimes need its moves, not RUONIA's noise)."""
+    s = sources.load("cbr:KEYRATE")
+    return ffill_on(s.dates, s.values, days)
 
 
 def build(tax: float = TAX, progress=None) -> Sleeve:
@@ -452,9 +460,73 @@ def build(tax: float = TAX, progress=None) -> Sleeve:
     except Exception as e:  # noqa: BLE001
         notes.append(f"индексы корпоративных облигаций не загрузились: {e}")
     today = {kind: describe(m, d, picks[kind].get(T - 1, []), T - 1, groups, margin) for kind, _ in KINDS}
+    policy = policy_mixes(m.dates, ends, returns, notes)
+    policy["issues"] = issues(policy["mix"], today)
+    policy["plan"] = plan_issues(policy["mix"], today)
     notes.append(f"рынок облигаций: {len(m.dates)} недель с {m.dates[0]}, {len(m.secids)} выпусков; "
                  f"графики выплат — {len(sched)}; {time.time() - t0:.0f} с")
-    return Sleeve(dates=m.dates, returns=returns, held=picks, notes=notes, today=today)
+    return Sleeve(dates=m.dates, returns=returns, held=picks, notes=notes, today=today, policy=policy)
+
+
+POLICY_ROWS = [("base", "База: корпоративные флоатеры 50%, короткие ОФЗ и корпоративные по 25%"),
+               ("policy_rule", "По режиму ЦБ: доли, заданные заранее"),
+               ("policy", "По режиму ЦБ: оптимум на прошлых месяцах режима")]
+
+
+def policy_mixes(days: list[str], ends: list[int], returns: dict[str, np.ndarray], notes: list[str]) -> dict:
+    """The base mix, the regime's prior and its walk-forward optimum (chosen on the after-tax returns) into `returns`;
+    today's regime and mixes."""
+    try:
+        key = raw_key_rate(days)
+    except Exception as e:  # noqa: BLE001 - no key rate: every month is a pause
+        notes.append(f"ключевая ставка не загрузилась ({e}): режим ЦБ везде «пауза»")
+        key = np.full(len(days), np.nan)
+    regime = bp.regimes(days, key)
+    rules, opts = bp.walk_forward({k: returns[f"{k}:tax"] for k in bp.CANDIDATES}, ends, regime)
+    for suffix in ("", ":tax"):
+        S = {k: returns[k + suffix] for k in bp.CANDIDATES}
+        returns["base" + suffix] = blend({k: returns[k + suffix] for k in bp.BASE}, bp.BASE)
+        returns["policy_rule" + suffix] = bp.dynamic_blend(S, rules, len(days))
+        returns["policy" + suffix] = bp.dynamic_blend(S, opts, len(days))
+    return bp.describe(regime, days, key, rules, opts)
+
+
+PLAN_ISSUES = 15  # issues in the account's plan: every one is an order placed by hand
+
+
+def plan_issues(mix: dict[str, float], today: dict[str, list[dict]], most: int = PLAN_ISSUES) -> list[dict]:
+    """The issues for the account: each kind's share of `mix` among round(share x `most`) of its issues (at least one;
+    the ladder's spread evenly over its durations, the others in the kind's own order - OFZ the most liquid,
+    corporates the widest spread or margin of the safe set). An issue two kinds hold is one row with both shares."""
+    held = {k: w for k, w in mix.items() if today.get(k)}
+    total = sum(held.values())
+    by: dict[str, dict] = {}
+    for k, w in held.items():
+        items = today[k]
+        n = min(len(items), max(1, round(w / total * most)))
+        if k == "ofz_ladder":
+            items = sorted(items, key=lambda b: b["duration"] or 0.0)
+            chosen = [items[round(i * (len(items) - 1) / max(n - 1, 1))] for i in range(n)] if n > 1 else [items[len(items) // 2]]
+        else:
+            chosen = items[:n]
+        for b in chosen:
+            if b["secid"] in by:
+                by[b["secid"]]["weight"] += w / total / n
+            else:
+                by[b["secid"]] = {**b, "kind": k, "weight": w / total / n}
+    return sorted(by.values(), key=lambda x: (-x["weight"], x["secid"]))
+
+
+def issues(mix: dict[str, float], today: dict[str, list[dict]]) -> list[dict]:
+    """The sleeve's issues today: each kind's share of `mix` split equally among its issues (a kind with none today
+    gives its share to the others)."""
+    held = {k: w for k, w in mix.items() if today.get(k)}
+    total = sum(held.values())
+    out = []
+    for k, w in held.items():
+        for b in today[k]:
+            out.append({**b, "kind": k, "weight": w / total / len(today[k])})
+    return sorted(out, key=lambda x: -x["weight"])
 
 
 CORP_SWITCH = "2018-12-29"  # RUCBTRNS starts
@@ -514,9 +586,9 @@ def report(tax: float = TAX, start: str = START, progress=None) -> dict:
     i0 = next(i for i, d in enumerate(days) if d >= start)
     recent = date.fromisoformat(days[-1]).replace(year=date.fromisoformat(days[-1]).year - RECENT).isoformat()
     j0 = next(i for i, d in enumerate(days) if d >= recent)
-    titles = {**KIND_TITLES, **{k: t for k, t, _ in MIXES}, **dict(BENCHMARKS)}
+    titles = {**KIND_TITLES, **{k: t for k, t, _ in MIXES}, **dict(POLICY_ROWS), **dict(BENCHMARKS)}
     rows = []
-    for key in [k for k, _ in KINDS] + [k for k, _, _ in MIXES] + [k for k, _ in BENCHMARKS]:
+    for key in [k for k, _ in KINDS] + [k for k, _, _ in MIXES] + [k for k, _ in POLICY_ROWS] + [k for k, _ in BENCHMARKS]:
         x = sl.returns.get(key)
         if x is None:
             continue
@@ -545,6 +617,6 @@ def report(tax: float = TAX, start: str = START, progress=None) -> dict:
             curves[key] = [None if i < first else float(grow[i] / grow[first]) for i in idx]
     return {"date": days[-1], "start": days[i0], "recent_from": days[j0], "tax": tax, "rows": rows, "years": years,
             "curves": {"dates": [days[i0 + i] for i in idx], "series": curves},
-            "today": sl.today, "notes": sl.notes, "titles": titles,
+            "today": sl.today, "notes": sl.notes, "titles": titles, "policy": sl.policy,
             "params": {"buy_life": BUY_LIFE, "sell_life": SELL_LIFE, "min_value": MIN_VALUE, "spread_cap": SPREAD_CAP,
                        "float_margin": FLOAT_MARGIN, "max_corp": MAX_CORP, "max_ofz": MAX_OFZ, "cost": COST}}

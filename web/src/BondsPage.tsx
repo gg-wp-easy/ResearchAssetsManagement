@@ -9,7 +9,10 @@ import { Card, Note, Segmented, TableWrap, V } from "./ui";
 const KINDS = ["ofz_short", "ofz_long", "ofz_ladder", "ofz_float", "ofz_linker", "corp_fixed", "corp_float"];
 const MIXES = ["near_cash", "ladder", "ofz3", "mixed"];
 const BENCH = ["RGBITR", "RUCB", "SBGB", "cash"];
-const GROUPS: [string, string[]][] = [["Виды облигаций", KINDS], ["Смеси видов", MIXES], ["Для сравнения", BENCH]];
+const POLICY = ["base", "policy_rule", "policy"];
+const GROUPS: [string, string[]][] = [["Виды облигаций", KINDS], ["Смеси видов", MIXES], ["По режиму ЦБ", POLICY],
+  ["Для сравнения", BENCH]];
+const REGIMES: Record<string, string> = { tight: "ужесточение", hold: "пауза", ease: "смягчение" };
 
 export function BondsPage() {
   const [res, setRes] = useState<BondsResult | null>(null);
@@ -35,6 +38,7 @@ export function BondsPage() {
       {res && (
         <div className={busy ? "stale" : ""}>
           <Summary r={res} />
+          <Policy r={res} />
           <Growth r={res} />
           <Years r={res} />
           <Today r={res} />
@@ -85,16 +89,53 @@ function Summary({ r }: { r: BondsResult }) {
   );
 }
 
+function Policy({ r }: { r: BondsResult }) {
+  const p = r.policy;
+  const kinds = Array.from(new Set([...Object.keys(p.base), ...Object.values(p.priors).flatMap((x) => Object.keys(x)),
+    ...Object.keys(p.mix)])).sort((a, b) => KINDS.indexOf(a) - KINDS.indexOf(b));
+  const changes = p.history.filter((h, i) => i === 0 || p.history[i - 1].regime !== h.regime);
+  const cell = (x: number | undefined) => (x ? pct(x, 0) : "");
+  return (
+    <Card title={`Режим ЦБ сейчас: ${p.title}`} sub={<>С {day(p.since)}, ключевая ставка {pct(p.key, 2)}. Режим — по ставке за последние {p.params.weeks} недель: подняли и не снижали — ужесточение, снизили и не поднимали — смягчение, не меняли — пауза. Доли «заранее» заданы до проверки; «оптимум» — каждый месяц лучшее сочетание доходности и колебаний на прошлых месяцах того же режима (после налога), наполовину назад к долям «заранее» — иначе десять циклов ставки переобучили бы его.</>}>
+      <TableWrap label="Доли видов по режимам">
+        <table className="compact">
+          <thead><tr><th>Вид</th><th className="r">База</th>{Object.keys(p.priors).map((g) => <th key={g} className="r">{REGIMES[g]}: заранее</th>)}<th className="r">Сейчас: оптимум</th></tr></thead>
+          <tbody>
+            {kinds.map((k) => (
+              <tr key={k}><td>{r.titles[k] ?? k}</td><td className="r">{cell(p.base[k])}</td>
+                {Object.keys(p.priors).map((g) => <td key={g} className={"r" + (g === p.regime ? " sel" : "")}>{cell(p.priors[g][k])}</td>)}
+                <td className="r"><b>{cell(p.mix[k])}</b></td></tr>
+            ))}
+          </tbody>
+        </table>
+      </TableWrap>
+      <p className="foot">Смены режима: {changes.map((h) => `${day(h.date)} — ${REGIMES[h.regime]}${h.key !== null ? ` (${pct(h.key, 2)})` : ""}`).join("; ")}.</p>
+      <TableWrap label="Выпуски плана">
+        <table className="compact">
+          <thead><tr><th>Выпуск</th><th>Вид</th><th className="r">Доля блока</th><th className="r">Цена, %</th><th className="r">Доходность</th><th className="r">Дюрация</th></tr></thead>
+          <tbody>
+            {p.plan.map((b) => (
+              <tr key={`${b.kind}-${b.secid}`}><td>{b.name} <span className="muted">{b.secid}</span></td><td className="muted">{SHORT[b.kind] ?? b.kind}</td>
+                <td className="r">{pct(b.weight, 1)}</td><td className="r">{num(b.price, 2)}</td><td className="r">{pct(b.ytm, 1)}</td><td className="r">{num(b.duration, 1)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </TableWrap>
+      <p className="foot">Выпуски плана счёта («Мой счёт», бот): не больше 15 по долям видов — у лестницы разные сроки, у остальных видов первые по ликвидности или доходу; выпуск двух видов — одна строка. Всего в составе видов {p.issues.length} выпусков.</p>
+    </Card>
+  );
+}
+
 function Growth({ r }: { r: BondsResult }) {
   const t = useTheme();
   const [view, setView] = useState<"mix" | "kinds">("mix");
   const [taxed, setTaxed] = useState(false);
-  const keys = view === "mix" ? [...MIXES, "RGBITR", "RUCB", "SBGB", "cash"] : [...KINDS, "cash"];
+  const keys = view === "mix" ? ["policy", "base", "near_cash", "ladder", "RGBITR", "RUCB", "SBGB", "cash"] : [...KINDS, "cash"];
   const opt = useMemo(() => {
     const lines = keys.filter((k) => r.curves.series[k]).map((k, i) => {
       const tk = taxed && r.curves.series[`${k}:tax`] ? `${k}:tax` : k;
       return { name: r.titles[k] ?? k, values: r.curves.series[tk], color: k === "cash" ? t.gray : t.series[i % 8],
-        dashed: k === "cash" || BENCH.includes(k), width: MIXES.includes(k) ? 2.5 : 2 };
+        dashed: k === "cash" || BENCH.includes(k), width: k === "policy" ? 3 : MIXES.includes(k) ? 2.5 : 2 };
     });
     const all = lines.flatMap((l) => l.values.filter((v): v is number => v !== null));
     return timeLines(t, r.curves.dates, lines, { log: true, yFmt: (v) => num(v, 1), tipFmt: (v) => num(v, 2), zoom: true,
@@ -114,7 +155,7 @@ function Growth({ r }: { r: BondsResult }) {
 }
 
 function Years({ r }: { r: BondsResult }) {
-  const keys = [...KINDS, ...MIXES, ...BENCH].filter((k) => r.rows.some((x) => x.key === k));
+  const keys = [...KINDS, ...MIXES, ...POLICY, ...BENCH].filter((k) => r.rows.some((x) => x.key === k));
   return (
     <Card title="По годам" sub="Доход за календарный год до налога.">
       <TableWrap label="Доход по годам">
@@ -134,7 +175,8 @@ function Years({ r }: { r: BondsResult }) {
 
 const SHORT: Record<string, string> = {
   ofz_short: "ОФЗ коротк.", ofz_long: "ОФЗ длин.", ofz_ladder: "лестница", ofz_float: "ОФЗ-ПК", ofz_linker: "ОФЗ-ИН",
-  corp_fixed: "корп.", corp_float: "корп. флоат.", near_cash: "смесь: почти деньги", ladder: "смесь: лестница", ofz3: "смесь: ОФЗ×3", mixed: "смесь: с корп.",
+  corp_fixed: "корп.", corp_float: "корп. флоат.", near_cash: "смесь: почти деньги", ladder: "смесь: лестница",
+  base: "база", policy_rule: "ЦБ: заранее", policy: "ЦБ: оптимум", ofz3: "смесь: ОФЗ×3", mixed: "смесь: с корп.",
   RGBITR: "RGBITR", RUCB: "RUCB", SBGB: "SBGB", cash: "RUONIA",
 };
 

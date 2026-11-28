@@ -42,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     ac.add_argument("--limit", type=float, default=0.25, help="предел потерь в любом сценарии (0 — без предела)")
     ac.add_argument("--trend", default="main_guard", help="main_guard (как бот с 2026-11-27) | main")
     ac.add_argument("--equity", default="composite", help="composite | gbm | ew | mcftr")
+    ac.add_argument("--bonds", default="own", help="own (свои выпуски по режиму ЦБ) | ofz (фонд или фьючерс RB) | corp")
     ac.add_argument("--set", nargs="*", default=[], metavar="КЛЮЧ=ЗНАЧЕНИЕ",
                     help="настройки счёта на этот расчёт (money=200000 bonds=futures trend_exec=weekly ...)")
     ac.add_argument("--save", action="store_true", help="сохранить --set в data/user/account.json")
@@ -148,14 +149,19 @@ def main(argv: list[str] | None = None) -> int:
         if a.save:
             account.save_settings({**account.load_settings().as_dict(), **over})
         if a.export:
-            out = account.write_export(a.export, {"opts": {"limit": a.limit, "trend": a.trend, "equity": a.equity},
-                                                  "settings": over})
+            out = account.write_export(a.export, {"opts": {"limit": a.limit, "trend": a.trend, "equity": a.equity,
+                                                           "bonds": a.bonds}, "settings": over})
             w = out["weights"]
             print(f"План для бота: {a.export} на {out['date']} (решение {out['decided']}); акции {w['equity']:.0%}, "
                   f"облигации {w['bonds']:.0%}, тренд {w['trend']:.0%}, деньги {w['cash']:.0%}; бумаг {len(out['rows'])}, "
                   f"фьючерсов {len(out['futures'])}")
+            if out.get("bond_policy"):
+                bp_ = out["bond_policy"]
+                print(f"Облигации: режим ЦБ «{bp_['title']}» с {bp_['since']}, ключевая {bp_['key']:.2%}; "
+                      + ", ".join(f"{k} {v:.0%}" for k, v in sorted(bp_["mix"].items(), key=lambda x: -x[1])))
             return 0
-        res = account.report({"opts": {"limit": a.limit, "trend": a.trend, "equity": a.equity}, "settings": over})
+        res = account.report({"opts": {"limit": a.limit, "trend": a.trend, "equity": a.equity, "bonds": a.bonds},
+                              "settings": over})
         m, st, pl = res["meta"], res["settings"], res["plan"]
         print(f"Счёт {rub(st['capital'])} ₽ ({rub(st['money'])} на бумаги, {rub(st['futures_money'])} под фьючерсы), "
               f"{m['from']}..{m['to']}; комиссии {st['fee']:.3%} / фьючерсы {st['fee_fut']:.3%}, тариф "
